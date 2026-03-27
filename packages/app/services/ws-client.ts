@@ -37,6 +37,18 @@ class WsClient {
   private pingTimeout: ReturnType<typeof setTimeout> | null = null;
   private pingSentAt = 0;
 
+  /** Listeners registered via onMessage() */
+  private messageListeners: Set<(msg: ServerMessage) => void> = new Set();
+
+  /**
+   * Register a listener for all incoming ServerMessages.
+   * Returns an unsubscribe function — call it in useEffect cleanup.
+   */
+  onMessage(listener: (msg: ServerMessage) => void): () => void {
+    this.messageListeners.add(listener);
+    return () => this.messageListeners.delete(listener);
+  }
+
   /** Persistent UUID for this device */
   private readonly clientId: string = PERSISTENT_CLIENT_ID;
   /** Human-readable device name */
@@ -161,6 +173,15 @@ class WsClient {
     } catch {
       console.warn('[WsClient] Failed to parse message:', data);
       return;
+    }
+
+    // Notify all registered listeners before processing
+    for (const listener of Array.from(this.messageListeners)) {
+      try {
+        listener(msg);
+      } catch (err) {
+        console.warn('[WsClient] Message listener error:', err);
+      }
     }
 
     switch (msg.type) {
