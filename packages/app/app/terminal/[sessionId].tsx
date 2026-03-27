@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -16,10 +17,15 @@ import {
 import { useLocalSearchParams } from 'expo-router';
 import { useSessionsStore } from '../../stores/sessions.store';
 import { wsClient } from '../../services/ws-client';
+import { clipboardService } from '../../services/clipboard.service';
+import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import { TerminalOutput } from '../../components/terminal/TerminalOutput';
 import { ControlBar } from '../../components/terminal/ControlBar';
 import { InputBar } from '../../components/terminal/InputBar';
 import { InputLockBanner } from '../../components/terminal/InputLockBanner';
+import { ClipboardPopup } from '../../components/clipboard/ClipboardPopup';
+import { ClipboardBubble } from '../../components/clipboard/ClipboardBubble';
+import { PromptLibrarySheet } from '../../components/prompt-library/PromptLibrarySheet';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { useSettingsStore } from '../../stores/settings.store';
@@ -99,6 +105,9 @@ export default function TerminalSessionScreen(): React.ReactElement {
 
   const [showPromptLibrary, setShowPromptLibrary] = useState(false);
   const [showClipboard, setShowClipboard] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
+  const [clipboardContent, setClipboardContent] = useState('');
+  const [showBubble, setShowBubble] = useState(false);
 
   const isNoSession = !sessionId || sessionId === 'no-session';
   const showEmpty = isNoSession || !hasSessions;
@@ -143,10 +152,24 @@ export default function TerminalSessionScreen(): React.ReactElement {
     wasWaiting.current = session.waitingForInput;
   }, [session?.waitingForInput, vibrationOnWaitingInput]);
 
+  // ── Clipboard service subscription ───────────
+
+  useEffect(() => {
+    clipboardService.startMonitoring();
+    const unsubscribe = clipboardService.subscribe((state) => {
+      setClipboardContent(state.content);
+      setShowBubble(state.showBubble);
+    });
+    return () => {
+      unsubscribe();
+      clipboardService.stopMonitoring();
+    };
+  }, []);
+
   // ── Long press on terminal text ───────────────
 
   const handleTextLongPress = useCallback((text: string) => {
-    // Phase 6 will wire this to the clipboard popup
+    setSelectedText(text);
     setShowClipboard(true);
   }, []);
 
@@ -158,6 +181,52 @@ export default function TerminalSessionScreen(): React.ReactElement {
 
   const handleOpenClipboard = useCallback(() => {
     setShowClipboard(true);
+  }, []);
+
+  // ── Clipboard bubble paste ────────────────────
+
+  const handleBubblePaste = useCallback(() => {
+    if (sessionId && clipboardContent) {
+      wsClient.sendInput(sessionId, clipboardContent);
+    }
+    setShowBubble(false);
+    clipboardService.hideBubble();
+  }, [sessionId, clipboardContent]);
+
+  const handleBubbleDismiss = useCallback(() => {
+    setShowBubble(false);
+    clipboardService.hideBubble();
+  }, []);
+
+  // ── Prompt library select ─────────────────────
+
+  const handleSelectPrompt = useCallback(
+    (content: string) => {
+      if (sessionId) {
+        wsClient.sendInput(sessionId, content);
+      }
+    },
+    [sessionId]
+  );
+
+  // ── Save to prompt library from ClipboardPopup ─
+
+  const handleSaveToPromptLibrary = useCallback((text: string) => {
+    Alert.prompt(
+      'Save to Prompt Library',
+      'Enter a title for this prompt:',
+      (title) => {
+        if (title?.trim()) {
+          usePromptLibraryStore.getState().addPrompt({
+            title: title.trim(),
+            content: text,
+            tags: [],
+            isPinned: false,
+          });
+        }
+      },
+      'plain-text'
+    );
   }, []);
 
   // ─────────────────────────────────────────────
@@ -190,6 +259,13 @@ export default function TerminalSessionScreen(): React.ReactElement {
       {/* Waiting-for-input amber banner */}
       {session?.waitingForInput && <WaitingBanner />}
 
+      {/* Clipboard bubble — floats above control bar */}
+      <ClipboardBubble
+        isVisible={showBubble}
+        onPaste={handleBubblePaste}
+        onDismiss={handleBubbleDismiss}
+      />
+
       {/* Control bar */}
       <ControlBar
         sessionId={sessionId ?? ''}
@@ -203,9 +279,23 @@ export default function TerminalSessionScreen(): React.ReactElement {
         waitingForInput={session?.waitingForInput ?? false}
       />
 
-      {/* Phase 6 stubs */}
-      {showPromptLibrary ? null : null}
-      {showClipboard ? null : null}
+      {/* Clipboard popup — shown on terminal text long-press */}
+      <ClipboardPopup
+        isVisible={showClipboard}
+        selectedText={selectedText}
+        activeSessionId={sessionId ?? null}
+        allSessionIds={Object.keys(sessions)}
+        onClose={() => setShowClipboard(false)}
+        onSaveToPromptLibrary={handleSaveToPromptLibrary}
+      />
+
+      {/* Prompt library sheet */}
+      <PromptLibrarySheet
+        isVisible={showPromptLibrary}
+        onClose={() => setShowPromptLibrary(false)}
+        onSelectPrompt={handleSelectPrompt}
+        activeSessionId={sessionId ?? null}
+      />
     </KeyboardAvoidingView>
   );
 }
