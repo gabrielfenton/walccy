@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "Walccy",
+    "slug": "walccy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0D0D0D"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "dev.walccy.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0D0D0D"
+      },
+      "package": "dev.walccy.app"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        { "cameraPermission": "Allow Walccy to use your camera to scan QR codes." }
+      ],
+      [
+        "expo-notifications",
+        { "icon": "./assets/icon.png", "color": "#7B61FF" }
+      ]
+    ],
+    "scheme": "walccy",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
