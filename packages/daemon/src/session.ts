@@ -205,7 +205,8 @@ export class Session extends EventEmitter {
   // Typed overloads
   on(event: 'data', listener: (lines: BufferedLine[]) => void): this;
   on(event: 'exit', listener: () => void): this;
-  on(event: string, listener: (...args: unknown[]) => void): this {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
 
