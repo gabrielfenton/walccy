@@ -1,0 +1,9 @@
+{
+  "name": "walccy",
+  "private": true,
+  "workspaces": ["packages/daemon", "packages/app"],
+  "scripts": {
+    "build:daemon": "cd packages/daemon && npm run build",
+    "dev:daemon": "cd packages/daemon && npm run dev"
+  }
+}
