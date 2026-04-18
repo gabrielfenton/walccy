@@ -33,6 +33,11 @@ export class Session extends EventEmitter {
 
   readonly buffer: LineBuffer;
   private _info: SessionInfo;
+  /** Accumulates partial lines between data events. */
+  private _partialLine: string = '';
+  /** Timer for detecting idle state (waiting for input). */
+  private _idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly IDLE_TIMEOUT_MS = 3000;
 
   constructor(pid: number, cwd: string, name: string, maxBufferLines = 10000) {
     super();
@@ -66,6 +71,10 @@ export class Session extends EventEmitter {
     this._info.status = status;
   }
 
+  setConnectedClients(clients: string[]): void {
+    this._info.connectedClients = clients;
+  }
+
   /**
    * Spawn a new `claude` process in `cwd` via node-pty.
    * The daemon owns this PTY and can send input.
@@ -82,7 +91,7 @@ export class Session extends EventEmitter {
       cols,
       rows,
       cwd: this._info.cwd,
-      env: process.env as Record<string, string>,
+      env: this._sanitizedEnv(),
     });
 
     this.owned = true;
@@ -103,21 +112,38 @@ export class Session extends EventEmitter {
   /**
    * Attach to an external process by reading its stdout fd via /proc.
    * Creates a read-only (no-write) session.
+   *
+   * **Limitation:** Reading `/proc/{pid}/fd/1` only works reliably when the
+   * fd points to a regular file or a pipe whose other end is not being consumed
+   * concurrently. If fd/1 is a TTY, reads may return terminal input rather than
+   * output, or race with the terminal driver. For best results, prefer
+   * daemon-spawned sessions (where we own the PTY master).
    */
   async attach(): Promise<void> {
     if (this.pty || this.monitorStream) return;
 
     const fdPath = `/proc/${this.pid}/fd/1`;
 
+    // Verify the fd exists, is readable, and check what it points to
     try {
-      // Verify the fd exists and is readable
       fs.accessSync(fdPath, fs.constants.R_OK);
+      const realPath = fs.readlinkSync(fdPath);
+      // If fd points to a TTY, do NOT open a read stream — reading from a PTY
+      // slave competes with the terminal emulator for input, which blocks the
+      // user from typing.  Monitor as external-only (exit watcher only).
+      if (realPath.startsWith('/dev/pts/') || realPath.startsWith('/dev/tty')) {
+        logger.warn(
+          `Session ${this.id}: fd/1 points to ${realPath} (TTY) — skipping output monitor to avoid stealing terminal input`
+        );
+        this._info.status = 'active';
+        this._startExitWatcher();
+        return;
+      }
     } catch {
       logger.warn(
         `Session ${this.id}: cannot read ${fdPath} — monitoring as external-only`
       );
       this._info.status = 'active';
-      // Still mark active; the scanner keeps the session alive by PID presence.
       this._startExitWatcher();
       return;
     }
@@ -152,6 +178,8 @@ export class Session extends EventEmitter {
     this._startExitWatcher();
   }
 
+  private static readonly MAX_INPUT_LENGTH = 64 * 1024; // 64 KB
+
   /**
    * Send input to the owned PTY.
    * No-ops for external sessions (read-only).
@@ -162,6 +190,13 @@ export class Session extends EventEmitter {
         `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? 'unknown'})`
       );
       return;
+    }
+
+    if (data.length > Session.MAX_INPUT_LENGTH) {
+      logger.warn(
+        `Session ${this.id}: input too large (${data.length} bytes), truncating to ${Session.MAX_INPUT_LENGTH}`
+      );
+      data = data.slice(0, Session.MAX_INPUT_LENGTH);
     }
 
     // Record input in buffer
@@ -185,6 +220,11 @@ export class Session extends EventEmitter {
   }
 
   kill(): void {
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer);
+      this._idleTimer = null;
+    }
+
     if (this.pty) {
       try {
         this.pty.kill();
@@ -215,14 +255,16 @@ export class Session extends EventEmitter {
   // ────────────────────────────────────────────
 
   private _handleRawData(data: string, source: 'stdout' | 'stderr'): void {
-    // Split on newlines, keep partial last line if needed
-    const segments = data.split(/\r?\n/);
+    // Prepend any partial line from the previous chunk
+    const combined = this._partialLine + data;
+    const segments = combined.split(/\r?\n/);
     const bufferedLines: BufferedLine[] = [];
 
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i];
-      // Skip empty trailing segment caused by trailing newline
-      if (i === segments.length - 1 && seg === '') continue;
+    // The last segment is either empty (if data ended with \n) or a partial line
+    // to be carried over to the next data event.
+    this._partialLine = segments.pop() ?? '';
+
+    for (const seg of segments) {
       if (seg === undefined) continue;
 
       const line = this.buffer.push({
@@ -237,8 +279,54 @@ export class Session extends EventEmitter {
     if (bufferedLines.length > 0) {
       this._info.lastActivityAt = Date.now();
       this._info.status = 'active';
+
+      // Clear waitingForInput — new output means Claude is working
+      if (this._info.waitingForInput) {
+        this._info.waitingForInput = false;
+      }
+
       this.emit('data', bufferedLines);
+
+      // Reset the idle timer — if no output arrives for IDLE_TIMEOUT_MS,
+      // assume Claude is waiting for user input
+      this._resetIdleTimer();
     }
+  }
+
+  private _resetIdleTimer(): void {
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer);
+    }
+    this._idleTimer = setTimeout(() => {
+      this._idleTimer = null;
+      if (this._info.status === 'active' && !this._info.waitingForInput) {
+        this._info.waitingForInput = true;
+        // Emit an update so the WS server broadcasts the state change
+        this.emit('data', []);
+      }
+    }, Session.IDLE_TIMEOUT_MS);
+    this._idleTimer.unref();
+  }
+
+  /**
+   * Build a sanitized environment for spawned processes.
+   * Only passes through safe, well-known variables.
+   */
+  private _sanitizedEnv(): Record<string, string> {
+    const allowlist = [
+      'HOME', 'USER', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE',
+      'PATH', 'TERM', 'COLORTERM', 'EDITOR', 'VISUAL',
+      'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
+      'SSH_AUTH_SOCK', 'GPG_AGENT_INFO',
+      'NODE_ENV', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY',
+    ];
+    const env: Record<string, string> = {};
+    for (const key of allowlist) {
+      if (process.env[key] !== undefined) {
+        env[key] = process.env[key]!;
+      }
+    }
+    return env;
   }
 
   /**
