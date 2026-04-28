@@ -20,6 +20,7 @@ export interface Session {
   lineCount: number;
   waitingForInput: boolean;
   connectedClients: string[];
+  owned: boolean;
 }
 
 export interface BufferedLine {
@@ -74,6 +75,12 @@ export interface PingMessage {
   type: 'PING';
 }
 
+export interface RegisterPushTokenMessage {
+  type: 'REGISTER_PUSH_TOKEN';
+  token: string;
+  platform: 'android' | 'ios';
+}
+
 export type ClientMessage =
   | AuthMessage
   | ListSessionsMessage
@@ -81,7 +88,8 @@ export type ClientMessage =
   | UnsubscribeMessage
   | InputMessage
   | ResizeMessage
-  | PingMessage;
+  | PingMessage
+  | RegisterPushTokenMessage;
 
 // ──────────────────────────────────────────────
 // WebSocket message types  (Daemon → Client)

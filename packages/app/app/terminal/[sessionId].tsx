@@ -5,7 +5,6 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -26,6 +25,7 @@ import { InputLockBanner } from '../../components/terminal/InputLockBanner';
 import { ClipboardPopup } from '../../components/clipboard/ClipboardPopup';
 import { ClipboardBubble } from '../../components/clipboard/ClipboardBubble';
 import { PromptLibrarySheet } from '../../components/prompt-library/PromptLibrarySheet';
+import { TextInputModal } from '../../components/ui/TextInputModal';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { useSettingsStore } from '../../stores/settings.store';
@@ -80,6 +80,23 @@ function WaitingBanner(): React.ReactElement {
 }
 
 // ──────────────────────────────────────────────
+// Read-only banner (external sessions)
+// ──────────────────────────────────────────────
+
+function ReadOnlyBanner(): React.ReactElement {
+  return (
+    <View style={styles.readOnlyBanner}>
+      <View style={styles.readOnlyBadge}>
+        <Text style={styles.readOnlyBadgeText}>READ-ONLY</Text>
+      </View>
+      <Text style={styles.readOnlyText} numberOfLines={2}>
+        External session — output and input not available. Spawn a session from the app for full control.
+      </Text>
+    </View>
+  );
+}
+
+// ──────────────────────────────────────────────
 // Main screen
 // ──────────────────────────────────────────────
 
@@ -108,9 +125,11 @@ export default function TerminalSessionScreen(): React.ReactElement {
   const [selectedText, setSelectedText] = useState('');
   const [clipboardContent, setClipboardContent] = useState('');
   const [showBubble, setShowBubble] = useState(false);
+  const [savePromptText, setSavePromptText] = useState<string | null>(null);
 
   const isNoSession = !sessionId || sessionId === 'no-session';
   const showEmpty = isNoSession || !hasSessions;
+  const isReadOnly = !!session && session.owned === false;
 
   // ── Session subscription ──────────────────────
 
@@ -212,22 +231,23 @@ export default function TerminalSessionScreen(): React.ReactElement {
   // ── Save to prompt library from ClipboardPopup ─
 
   const handleSaveToPromptLibrary = useCallback((text: string) => {
-    Alert.prompt(
-      'Save to Prompt Library',
-      'Enter a title for this prompt:',
-      (title) => {
-        if (title?.trim()) {
-          usePromptLibraryStore.getState().addPrompt({
-            title: title.trim(),
-            content: text,
-            tags: [],
-            isPinned: false,
-          });
-        }
-      },
-      'plain-text'
-    );
+    setSavePromptText(text);
   }, []);
+
+  const handleSavePromptSubmit = useCallback(
+    (title: string) => {
+      if (title.trim() && savePromptText) {
+        usePromptLibraryStore.getState().addPrompt({
+          title: title.trim(),
+          content: savePromptText,
+          tags: [],
+          isPinned: false,
+        });
+      }
+      setSavePromptText(null);
+    },
+    [savePromptText]
+  );
 
   // ─────────────────────────────────────────────
 
@@ -241,6 +261,9 @@ export default function TerminalSessionScreen(): React.ReactElement {
         isVisible={inputLockState.active}
         clientName={inputLockState.clientName}
       />
+
+      {/* Read-only banner for external sessions */}
+      {isReadOnly && <ReadOnlyBanner />}
 
       {/* Main output area */}
       {showEmpty ? (
@@ -257,7 +280,7 @@ export default function TerminalSessionScreen(): React.ReactElement {
       )}
 
       {/* Waiting-for-input amber banner */}
-      {session?.waitingForInput && <WaitingBanner />}
+      {!isReadOnly && session?.waitingForInput && <WaitingBanner />}
 
       {/* Clipboard bubble — floats above control bar */}
       <ClipboardBubble
@@ -273,11 +296,13 @@ export default function TerminalSessionScreen(): React.ReactElement {
         onOpenClipboard={handleOpenClipboard}
       />
 
-      {/* Input bar */}
-      <InputBar
-        sessionId={sessionId ?? ''}
-        waitingForInput={session?.waitingForInput ?? false}
-      />
+      {/* Input bar — hidden for read-only external sessions */}
+      {!isReadOnly && (
+        <InputBar
+          sessionId={sessionId ?? ''}
+          waitingForInput={session?.waitingForInput ?? false}
+        />
+      )}
 
       {/* Clipboard popup — shown on terminal text long-press */}
       <ClipboardPopup
@@ -295,6 +320,15 @@ export default function TerminalSessionScreen(): React.ReactElement {
         onClose={() => setShowPromptLibrary(false)}
         onSelectPrompt={handleSelectPrompt}
         activeSessionId={sessionId ?? null}
+      />
+
+      {/* Save to prompt library modal (cross-platform Alert.prompt replacement) */}
+      <TextInputModal
+        visible={savePromptText !== null}
+        title="Save to Prompt Library"
+        message="Enter a title for this prompt:"
+        onSubmit={handleSavePromptSubmit}
+        onCancel={() => setSavePromptText(null)}
       />
     </KeyboardAvoidingView>
   );
@@ -373,5 +407,40 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.ui,
     fontSize: FontSize.caption,
     fontWeight: '600',
+  },
+
+  // ── Read-only banner ──────────────────────
+
+  readOnlyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  readOnlyBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    backgroundColor: Colors.accentAmber + '33',
+    borderWidth: 1,
+    borderColor: Colors.accentAmber,
+  },
+  readOnlyBadgeText: {
+    color: Colors.accentAmber,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  readOnlyText: {
+    flex: 1,
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    lineHeight: 16,
   },
 });

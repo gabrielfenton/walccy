@@ -56,6 +56,7 @@ export class Session extends EventEmitter {
       lineCount: 0,
       waitingForInput: false,
       connectedClients: [],
+      owned: false,
     };
   }
 
@@ -95,6 +96,7 @@ export class Session extends EventEmitter {
     });
 
     this.owned = true;
+    this._info.owned = true;
     this._info.status = 'active';
 
     this.pty.onData((data: string) => {
@@ -105,6 +107,7 @@ export class Session extends EventEmitter {
       this._info.status = 'ended';
       this.pty = null;
       this.owned = false;
+      this._info.owned = false;
       this.emit('exit');
     });
   }
