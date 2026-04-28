@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { MMKV } from 'react-native-mmkv';
 import { v4 as uuid } from 'uuid';
 
@@ -102,7 +102,7 @@ export const usePromptLibraryStore = create<PromptLibraryStore>()(
     }),
     {
       name: 'prompt-library',
-      storage: mmkvStorage,
+      storage: createJSONStorage(() => mmkvStorage),
     }
   )
 );

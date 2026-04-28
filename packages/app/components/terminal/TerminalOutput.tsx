@@ -14,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { FlashList, ListRenderItemInfo } from '@shopify/flash-list';
+import { FlashList, FlashListRef, ListRenderItemInfo } from '@shopify/flash-list';
 import { useOutputStore } from '../../stores/output.store';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
@@ -42,7 +42,7 @@ export function TerminalOutput({
   lineHeight = 1.5,
   onTextLongPress,
 }: TerminalOutputProps): React.ReactElement {
-  const flashListRef = useRef<FlashList<BufferedLine>>(null);
+  const flashListRef = useRef<FlashListRef<BufferedLine>>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const buffer = useOutputStore((s) => s.buffers[sessionId]);

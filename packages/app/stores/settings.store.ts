@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { MMKV } from 'react-native-mmkv';
+import * as SecureStore from 'expo-secure-store';
 import { v4 as uuid } from 'uuid';
 import type { MonoFontFamily } from '../constants/typography';
 
@@ -102,12 +103,15 @@ export const useSettingsStore = create<SettingsStore>()(
         return newHost;
       },
 
-      removeHost: (id) =>
+      removeHost: (id) => {
+        // Also delete the secret from SecureStore
+        SecureStore.deleteItemAsync(`secret_${id}`).catch(() => {});
         set((state) => ({
           savedHosts: state.savedHosts.filter((h) => h.id !== id),
           lastConnectedHostId:
             state.lastConnectedHostId === id ? null : state.lastConnectedHostId,
-        })),
+        }));
+      },
 
       updateHost: (id, changes) =>
         set((state) => ({
@@ -130,7 +134,7 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: 'settings',
-      storage: mmkvStorage,
+      storage: createJSONStorage(() => mmkvStorage),
     }
   )
 );
