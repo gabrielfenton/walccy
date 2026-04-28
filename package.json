@@ -1,9 +1,26 @@
 {
   "name": "walccy",
   "private": true,
-  "workspaces": ["packages/daemon", "packages/app"],
+  "workspaces": [
+    "packages/daemon",
+    "packages/app"
+  ],
   "scripts": {
     "build:daemon": "cd packages/daemon && npm run build",
     "dev:daemon": "cd packages/daemon && npm run dev"
+  },
+  "dependencies": {
+    "@react-navigation/bottom-tabs": "^7.15.10",
+    "@react-navigation/material-top-tabs": "^7.4.24",
+    "@react-navigation/native-stack": "^7.14.12",
+    "expo-application": "~7.0.8",
+    "expo-camera": "~17.0.10",
+    "expo-clipboard": "~8.0.8",
+    "expo-notifications": "~0.32.16",
+    "expo-router": "~6.0.23",
+    "expo-secure-store": "~15.0.8",
+    "expo-splash-screen": "~31.0.13",
+    "expo-status-bar": "~3.0.9",
+    "react-native-pager-view": "6.9.1"
   }
 }
