@@ -3,6 +3,8 @@ import type { WalccyConfig } from './config.js';
 import { SessionManager } from './session-manager.js';
 import { ProcessScanner } from './process-scanner.js';
 import { WsServer } from './ws-server.js';
+import { WrapServer } from './wrap-server.js';
+import { PushService } from './push.js';
 import { waitForTailscale } from './tailscale.js';
 import logger, { setLogLevel } from './logger.js';
 
@@ -11,6 +13,7 @@ export class Daemon {
   private sessionManager!: SessionManager;
   private processScanner!: ProcessScanner;
   private wsServer!: WsServer;
+  private wrapServer!: WrapServer;
 
   async start(): Promise<void> {
     // 1. Load config
@@ -32,7 +35,9 @@ export class Daemon {
     // 3. Initialize subsystems
     this.sessionManager = new SessionManager(this.config.maxBufferLines);
     this.processScanner = new ProcessScanner();
-    this.wsServer = new WsServer(this.sessionManager, this.config, bindAddress);
+    const pushService = new PushService();
+    this.wsServer = new WsServer(this.sessionManager, this.config, bindAddress, pushService);
+    this.wrapServer = new WrapServer(this.sessionManager);
 
     // 4. Wire process scanner → session manager
     this.processScanner.on('process-found', async (pid: number, cwd: string) => {
@@ -55,8 +60,9 @@ export class Daemon {
       }
     });
 
-    // 5. Start WS server
+    // 5. Start WS server + wrapper IPC
     await this.wsServer.start();
+    await this.wrapServer.start();
 
     // 6. Start process scanner (if auto-detect enabled)
     if (this.config.autoDetect) {
@@ -72,6 +78,7 @@ export class Daemon {
     logger.info('Walccy daemon stopping…');
     this.processScanner?.stop();
     this.wsServer?.stop();
+    await this.wrapServer?.stop();
 
     // Remove all sessions
     for (const session of this.sessionManager?.getAllSessions() ?? []) {

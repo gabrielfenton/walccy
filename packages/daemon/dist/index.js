@@ -6,6 +6,13 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
@@ -23,10 +30,295 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/logger.ts
+function setLogLevel(level) {
+  logger.level = level;
+}
+var winston, path2, os2, fs2, logDir, logFile, isForeground, transports2, logger, logger_default;
+var init_logger = __esm({
+  "src/logger.ts"() {
+    "use strict";
+    winston = __toESM(require("winston"));
+    path2 = __toESM(require("path"));
+    os2 = __toESM(require("os"));
+    fs2 = __toESM(require("fs"));
+    logDir = path2.join(os2.homedir(), ".walccy", "logs");
+    if (!fs2.existsSync(logDir)) {
+      fs2.mkdirSync(logDir, { recursive: true });
+    }
+    logFile = path2.join(logDir, "daemon.log");
+    isForeground = process.env["WALCCY_FOREGROUND"] === "1";
+    transports2 = [
+      new winston.transports.File({
+        filename: logFile,
+        maxsize: 10 * 1024 * 1024,
+        // 10 MB
+        maxFiles: 3,
+        tailable: true,
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          winston.format.json()
+        )
+      })
+    ];
+    if (isForeground) {
+      transports2.push(
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.timestamp({ format: "HH:mm:ss" }),
+            winston.format.printf(({ level, message, timestamp, ...meta }) => {
+              const metaStr = Object.keys(meta).length ? " " + JSON.stringify(meta) : "";
+              return `${timestamp} [${level}] ${message}${metaStr}`;
+            })
+          )
+        })
+      );
+    }
+    logger = winston.createLogger({
+      level: process.env["WALCCY_LOG_LEVEL"] ?? "info",
+      transports: transports2
+    });
+    logger_default = logger;
+  }
+});
+
+// src/wrap-server.ts
+function getWrapSocketPath() {
+  return path6.join(os4.homedir(), ".walccy", "wrap.sock");
+}
+var fs5, net, os4, path6, WrapServer;
+var init_wrap_server = __esm({
+  "src/wrap-server.ts"() {
+    "use strict";
+    fs5 = __toESM(require("fs"));
+    net = __toESM(require("net"));
+    os4 = __toESM(require("os"));
+    path6 = __toESM(require("path"));
+    init_logger();
+    WrapServer = class {
+      constructor(sessionManager) {
+        this.sessionManager = sessionManager;
+        this.socketPath = getWrapSocketPath();
+      }
+      sessionManager;
+      server = null;
+      socketPath;
+      async start() {
+        const dir = path6.dirname(this.socketPath);
+        if (!fs5.existsSync(dir)) fs5.mkdirSync(dir, { recursive: true, mode: 448 });
+        if (fs5.existsSync(this.socketPath)) {
+          try {
+            fs5.unlinkSync(this.socketPath);
+          } catch {
+          }
+        }
+        this.server = net.createServer((socket) => this.handleConnection(socket));
+        await new Promise((resolve3, reject) => {
+          if (!this.server) return reject(new Error("server not initialized"));
+          this.server.once("error", reject);
+          this.server.listen(this.socketPath, () => {
+            fs5.chmodSync(this.socketPath, 384);
+            resolve3();
+          });
+        });
+        logger_default.info(`Wrap IPC listening on ${this.socketPath}`);
+      }
+      async stop() {
+        if (!this.server) return;
+        await new Promise((resolve3) => this.server.close(() => resolve3()));
+        if (fs5.existsSync(this.socketPath)) {
+          try {
+            fs5.unlinkSync(this.socketPath);
+          } catch {
+          }
+        }
+        this.server = null;
+      }
+      handleConnection(socket) {
+        let session = null;
+        let buffer = "";
+        socket.on("data", (chunk) => {
+          buffer += chunk.toString("utf8");
+          let newline;
+          while ((newline = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            if (!line) continue;
+            let msg;
+            try {
+              msg = JSON.parse(line);
+            } catch {
+              logger_default.warn(`wrap: malformed JSON from wrapper: ${line.slice(0, 120)}`);
+              continue;
+            }
+            if (msg.type === "REGISTER") {
+              if (session) {
+                logger_default.warn("wrap: REGISTER received twice on the same socket");
+                continue;
+              }
+              session = this.sessionManager.createWrappedSession(
+                msg.pid,
+                msg.cwd,
+                msg.name,
+                socket
+              );
+              socket.write(JSON.stringify({ type: "REGISTERED", sessionId: session.id }) + "\n");
+            } else if (msg.type === "OUTPUT") {
+              if (!session) {
+                logger_default.warn("wrap: OUTPUT before REGISTER, dropping");
+                continue;
+              }
+              const data = Buffer.from(msg.data, "base64").toString("utf8");
+              session.pushExternalData(data);
+            } else if (msg.type === "EXIT") {
+              if (session) this.sessionManager.removeSession(session.id);
+              session = null;
+              socket.end();
+            }
+          }
+        });
+        socket.on("close", () => {
+          if (session) {
+            this.sessionManager.removeSession(session.id);
+            session = null;
+          }
+        });
+        socket.on("error", (err) => {
+          logger_default.warn(`wrap: socket error: ${err.message}`);
+        });
+      }
+    };
+  }
+});
+
+// src/wrap-cli.ts
+var wrap_cli_exports = {};
+__export(wrap_cli_exports, {
+  runWrapper: () => runWrapper
+});
+async function runWrapper(argv) {
+  if (argv.length === 0) argv = ["claude"];
+  const cmd = argv[0];
+  const args = argv.slice(1);
+  const pty = require("node-pty");
+  const cols = process.stdout.columns ?? 80;
+  const rows = process.stdout.rows ?? 24;
+  const term = pty.spawn(cmd, args, {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd: process.cwd(),
+    env: process.env
+  });
+  const socket = net2.createConnection(getWrapSocketPath());
+  socket.once("connect", () => {
+    socket.write(
+      JSON.stringify({
+        type: "REGISTER",
+        pid: term.pid,
+        cwd: process.cwd(),
+        name: path8.basename(process.cwd()) || process.cwd(),
+        cols,
+        rows
+      }) + "\n"
+    );
+  });
+  let socketReady = false;
+  socket.on("data", (chunk) => {
+    let buffer = chunk.toString("utf8");
+    let nl;
+    while ((nl = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.type === "REGISTERED") {
+        socketReady = true;
+      } else if (msg.type === "INPUT" && msg.data) {
+        const data = Buffer.from(msg.data, "base64").toString("utf8");
+        term.write(data);
+      } else if (msg.type === "RESIZE" && msg.cols && msg.rows) {
+        try {
+          term.resize(msg.cols, msg.rows);
+        } catch {
+        }
+      }
+    }
+  });
+  socket.on("error", (err) => {
+    process.stderr.write(`
+[walccy] daemon socket error: ${err.message} (continuing without mirror)
+`);
+  });
+  socket.on("close", () => {
+    socketReady = false;
+  });
+  term.onData((data) => {
+    process.stdout.write(data);
+    if (socketReady) {
+      socket.write(
+        JSON.stringify({
+          type: "OUTPUT",
+          data: Buffer.from(data, "utf8").toString("base64")
+        }) + "\n"
+      );
+    }
+  });
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+  }
+  process.stdin.resume();
+  process.stdin.on("data", (b) => {
+    term.write(b.toString("utf8"));
+  });
+  process.on("SIGWINCH", () => {
+    const c = process.stdout.columns ?? 80;
+    const r = process.stdout.rows ?? 24;
+    try {
+      term.resize(c, r);
+    } catch {
+    }
+  });
+  await new Promise((resolve3) => {
+    term.onExit(({ exitCode }) => {
+      if (process.stdin.isTTY) {
+        try {
+          process.stdin.setRawMode(false);
+        } catch {
+        }
+      }
+      if (socket.writable) {
+        socket.write(JSON.stringify({ type: "EXIT", exitCode }) + "\n");
+        socket.end();
+      }
+      setTimeout(() => {
+        process.exit(exitCode);
+      }, 50);
+      resolve3();
+    });
+  });
+  return void 0;
+}
+var net2, path8;
+var init_wrap_cli = __esm({
+  "src/wrap-cli.ts"() {
+    "use strict";
+    net2 = __toESM(require("net"));
+    path8 = __toESM(require("path"));
+    init_wrap_server();
+  }
+});
+
 // src/index.ts
 var import_commander = require("commander");
-var os5 = __toESM(require("os"));
-var path7 = __toESM(require("path"));
+var os6 = __toESM(require("os"));
+var path9 = __toESM(require("path"));
 
 // src/config.ts
 var fs = __toESM(require("fs"));
@@ -190,54 +482,8 @@ var LineBuffer = class {
   }
 };
 
-// src/logger.ts
-var winston = __toESM(require("winston"));
-var path2 = __toESM(require("path"));
-var os2 = __toESM(require("os"));
-var fs2 = __toESM(require("fs"));
-var logDir = path2.join(os2.homedir(), ".walccy", "logs");
-if (!fs2.existsSync(logDir)) {
-  fs2.mkdirSync(logDir, { recursive: true });
-}
-var logFile = path2.join(logDir, "daemon.log");
-var isForeground = process.env["WALCCY_FOREGROUND"] === "1";
-var transports2 = [
-  new winston.transports.File({
-    filename: logFile,
-    maxsize: 10 * 1024 * 1024,
-    // 10 MB
-    maxFiles: 3,
-    tailable: true,
-    format: winston.format.combine(
-      winston.format.timestamp(),
-      winston.format.json()
-    )
-  })
-];
-if (isForeground) {
-  transports2.push(
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.timestamp({ format: "HH:mm:ss" }),
-        winston.format.printf(({ level, message, timestamp, ...meta }) => {
-          const metaStr = Object.keys(meta).length ? " " + JSON.stringify(meta) : "";
-          return `${timestamp} [${level}] ${message}${metaStr}`;
-        })
-      )
-    })
-  );
-}
-var logger = winston.createLogger({
-  level: process.env["WALCCY_LOG_LEVEL"] ?? "info",
-  transports: transports2
-});
-function setLogLevel(level) {
-  logger.level = level;
-}
-var logger_default = logger;
-
 // src/session.ts
+init_logger();
 var Session = class _Session extends import_events.EventEmitter {
   id;
   /** The original detected PID (or 0 for daemon-spawned sessions). */
@@ -246,6 +492,8 @@ var Session = class _Session extends import_events.EventEmitter {
   pty = null;
   /** Read-stream used to monitor external processes. */
   monitorStream = null;
+  /** Wrapper-CLI socket — set when this session is fed by `walccy wrap`. */
+  wrapperSocket = null;
   /** Whether we own the PTY (can accept writes). */
   owned = false;
   buffer;
@@ -285,6 +533,23 @@ var Session = class _Session extends import_events.EventEmitter {
   }
   setConnectedClients(clients) {
     this._info.connectedClients = clients;
+  }
+  /**
+   * Bind a wrapper-CLI socket to this session.  Output bytes will arrive via
+   * `pushExternalData()` and writes initiated by daemon clients will be sent
+   * back through the socket so the wrapper can feed them to the local PTY.
+   * Input is bidirectional, so the session is treated as `owned` for UI
+   * purposes — the read-only banner won't show.
+   */
+  attachWrapper(socket) {
+    this.wrapperSocket = socket;
+    this.owned = true;
+    this._info.owned = true;
+    this._info.status = "active";
+  }
+  /** Feed raw output from a wrapper-CLI socket into this session's buffer. */
+  pushExternalData(data) {
+    this._handleRawData(data, "stdout");
   }
   /**
    * Spawn a new `claude` process in `cwd` via node-pty.
@@ -377,7 +642,7 @@ var Session = class _Session extends import_events.EventEmitter {
    * No-ops for external sessions (read-only).
    */
   write(data, clientId) {
-    if (!this.owned || !this.pty) {
+    if (!this.owned || !this.pty && !this.wrapperSocket) {
       logger_default.warn(
         `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? "unknown"})`
       );
@@ -398,9 +663,24 @@ var Session = class _Session extends import_events.EventEmitter {
     });
     this._info.lastActivityAt = Date.now();
     this.emit("data", [line]);
-    this.pty.write(data);
+    if (this.wrapperSocket) {
+      this.wrapperSocket.write(
+        JSON.stringify({
+          type: "INPUT",
+          data: Buffer.from(data, "utf8").toString("base64")
+        }) + "\n"
+      );
+    } else if (this.pty) {
+      this.pty.write(data);
+    }
   }
   resize(cols, rows) {
+    if (this.wrapperSocket) {
+      this.wrapperSocket.write(
+        JSON.stringify({ type: "RESIZE", cols, rows }) + "\n"
+      );
+      return;
+    }
     if (!this.owned || !this.pty) return;
     this.pty.resize(cols, rows);
   }
@@ -419,6 +699,13 @@ var Session = class _Session extends import_events.EventEmitter {
     if (this.monitorStream) {
       this.monitorStream.destroy();
       this.monitorStream = null;
+    }
+    if (this.wrapperSocket) {
+      try {
+        this.wrapperSocket.destroy();
+      } catch {
+      }
+      this.wrapperSocket = null;
     }
     this._info.status = "ended";
   }
@@ -519,6 +806,7 @@ var Session = class _Session extends import_events.EventEmitter {
 };
 
 // src/session-manager.ts
+init_logger();
 var SessionManager = class extends import_events2.EventEmitter {
   sessions = /* @__PURE__ */ new Map();
   /** Maps detected PID → session ID to avoid duplicate sessions. */
@@ -587,6 +875,34 @@ var SessionManager = class extends import_events2.EventEmitter {
     this.emit("session-added", session.info);
     return session;
   }
+  /**
+   * Create a session backed by a `walccy wrap` CLI socket.  The wrapper owns
+   * the actual PTY and forwards I/O over `socket`.
+   */
+  createWrappedSession(pid, cwd, name, socket) {
+    const finalName = name ?? this.deriveName(cwd);
+    const session = new Session(pid, cwd, finalName, this.maxBufferLines);
+    session.attachWrapper(socket);
+    this.sessions.set(session.id, session);
+    if (pid > 0) this.pidToSessionId.set(pid, session.id);
+    session.on("data", () => {
+      this.emit("session-updated", session.id, {
+        lastActivityAt: session.info.lastActivityAt,
+        lineCount: session.info.lineCount,
+        status: session.info.status,
+        waitingForInput: session.info.waitingForInput
+      });
+    });
+    session.on("exit", () => {
+      logger_default.info(`Wrapped session ${session.id} (pid=${pid}) exited`);
+      this.removeSession(session.id);
+    });
+    logger_default.info(
+      `Wrapped session created: id=${session.id} pid=${pid} cwd=${cwd} name=${finalName}`
+    );
+    this.emit("session-added", session.info);
+    return session;
+  }
   getSession(id) {
     return this.sessions.get(id);
   }
@@ -643,6 +959,7 @@ var SessionManager = class extends import_events2.EventEmitter {
 var import_events3 = require("events");
 var fsp = __toESM(require("fs/promises"));
 var path4 = __toESM(require("path"));
+init_logger();
 var ProcessScanner = class extends import_events3.EventEmitter {
   interval = null;
   knownPids = /* @__PURE__ */ new Set();
@@ -751,6 +1068,7 @@ var import_uuid2 = require("uuid");
 var fs4 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
+init_logger();
 var COMMON_DEV_ROOTS = [
   "Documents",
   "Documents/dev",
@@ -903,6 +1221,9 @@ function recentCwdsFromSessions(sessions) {
   }
   return out;
 }
+
+// src/ws-server.ts
+init_logger();
 
 // package.json
 var package_default = {
@@ -1355,10 +1676,14 @@ var WsServer = class _WsServer {
   }
 };
 
+// src/daemon.ts
+init_wrap_server();
+
 // src/push.ts
-var fs5 = __toESM(require("fs"));
+var fs6 = __toESM(require("fs"));
 var https = __toESM(require("https"));
 var crypto3 = __toESM(require("crypto"));
+init_logger();
 function base64url(buf) {
   return buf.toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
@@ -1427,8 +1752,8 @@ var PushService = class {
   constructor(serviceAccountPath) {
     const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
     try {
-      if (fs5.existsSync(saPath)) {
-        const raw = fs5.readFileSync(saPath, "utf-8");
+      if (fs6.existsSync(saPath)) {
+        const raw = fs6.readFileSync(saPath, "utf-8");
         this.serviceAccount = JSON.parse(raw);
         logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
       } else {
@@ -1538,6 +1863,7 @@ var PushService = class {
 // src/tailscale.ts
 var import_child_process = require("child_process");
 var import_util = require("util");
+init_logger();
 var execFileAsync = (0, import_util.promisify)(import_child_process.execFile);
 async function getTailscaleIP() {
   if (process.env["WALCCY_DEV_MODE"] === "1") {
@@ -1581,11 +1907,13 @@ function delay(ms) {
 }
 
 // src/daemon.ts
+init_logger();
 var Daemon = class {
   config;
   sessionManager;
   processScanner;
   wsServer;
+  wrapServer;
   async start() {
     this.config = loadConfig();
     setLogLevel(this.config.logLevel);
@@ -1602,6 +1930,7 @@ var Daemon = class {
     this.processScanner = new ProcessScanner();
     const pushService = new PushService();
     this.wsServer = new WsServer(this.sessionManager, this.config, bindAddress, pushService);
+    this.wrapServer = new WrapServer(this.sessionManager);
     this.processScanner.on("process-found", async (pid, cwd) => {
       if (this.sessionManager.getSessionByPid(pid)) return;
       const session = this.sessionManager.createSession(pid, cwd);
@@ -1618,6 +1947,7 @@ var Daemon = class {
       }
     });
     await this.wsServer.start();
+    await this.wrapServer.start();
     if (this.config.autoDetect) {
       this.processScanner.start(this.config.autoDetectInterval);
     }
@@ -1629,6 +1959,7 @@ var Daemon = class {
     logger_default.info("Walccy daemon stopping\u2026");
     this.processScanner?.stop();
     this.wsServer?.stop();
+    await this.wrapServer?.stop();
     for (const session of this.sessionManager?.getAllSessions() ?? []) {
       this.sessionManager.removeSession(session.id);
     }
@@ -1637,21 +1968,21 @@ var Daemon = class {
 };
 
 // src/installer.ts
-var fs6 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
-var os4 = __toESM(require("os"));
+var fs7 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
+var os5 = __toESM(require("os"));
 var import_child_process2 = require("child_process");
 var import_util2 = require("util");
 var execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
 function getServiceDir() {
-  return path6.join(os4.homedir(), ".config", "systemd", "user");
+  return path7.join(os5.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path6.join(getServiceDir(), "walccy.service");
+  return path7.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path6.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path7.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -1674,10 +2005,10 @@ WantedBy=default.target
 async function installSystemdService() {
   const serviceDir = getServiceDir();
   const servicePath = getServicePath();
-  if (!fs6.existsSync(serviceDir)) {
-    fs6.mkdirSync(serviceDir, { recursive: true });
+  if (!fs7.existsSync(serviceDir)) {
+    fs7.mkdirSync(serviceDir, { recursive: true });
   }
-  fs6.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
+  fs7.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
   console.log(`Wrote systemd unit: ${servicePath}`);
   try {
     await execFileAsync2("systemctl", ["--user", "daemon-reload"]);
@@ -1701,8 +2032,8 @@ async function uninstallSystemdService() {
     await execFileAsync2("systemctl", ["--user", "disable", "walccy.service"]);
   } catch {
   }
-  if (fs6.existsSync(servicePath)) {
-    fs6.unlinkSync(servicePath);
+  if (fs7.existsSync(servicePath)) {
+    fs7.unlinkSync(servicePath);
     console.log(`Removed systemd unit: ${servicePath}`);
   } else {
     console.log("No systemd unit file found.");
@@ -1715,7 +2046,7 @@ async function uninstallSystemdService() {
 }
 async function getServiceStatus() {
   const servicePath = getServicePath();
-  if (!fs6.existsSync(servicePath)) {
+  if (!fs7.existsSync(servicePath)) {
     return "not-installed";
   }
   try {
@@ -1835,7 +2166,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os5.hostname();
+  const hostname2 = os6.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -1894,15 +2225,15 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path7.dirname(configPath);
-        const fs7 = await import("fs");
-        if (fs7.existsSync(configDir)) {
-          fs7.rmSync(configDir, { recursive: true, force: true });
+        const configDir = path9.dirname(configPath);
+        const fs8 = await import("fs");
+        if (fs8.existsSync(configDir)) {
+          fs8.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path7.join(os5.homedir(), ".walccy");
-        if (fs7.existsSync(logDir2)) {
-          fs7.rmSync(logDir2, { recursive: true, force: true });
+        const logDir2 = path9.join(os6.homedir(), ".walccy");
+        if (fs8.existsSync(logDir2)) {
+          fs8.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");
@@ -1923,6 +2254,12 @@ program.command("unregister-session").description("Unregister a shell session (u
   const pid = opts.pid ?? String(process.pid);
   process.stdout.write(`[walccy] session unregistered: pid=${pid}
 `);
+});
+program.command("wrap").description(
+  "Run a command (default: claude) inside a PTY whose output is mirrored to the running daemon, so the mobile app can see it and send input back."
+).argument("[args...]", 'Command and arguments (defaults to "claude")').allowUnknownOption(true).action(async (args) => {
+  const { runWrapper: runWrapper2 } = await Promise.resolve().then(() => (init_wrap_cli(), wrap_cli_exports));
+  await runWrapper2(args ?? []);
 });
 program.parseAsync(process.argv).catch((err) => {
   console.error(err);

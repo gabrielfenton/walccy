@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { IPty } from 'node-pty';
@@ -28,6 +29,8 @@ export class Session extends EventEmitter {
   private pty: IPty | null = null;
   /** Read-stream used to monitor external processes. */
   private monitorStream: fs.ReadStream | null = null;
+  /** Wrapper-CLI socket — set when this session is fed by `walccy wrap`. */
+  private wrapperSocket: net.Socket | null = null;
   /** Whether we own the PTY (can accept writes). */
   private owned: boolean = false;
 
@@ -74,6 +77,25 @@ export class Session extends EventEmitter {
 
   setConnectedClients(clients: string[]): void {
     this._info.connectedClients = clients;
+  }
+
+  /**
+   * Bind a wrapper-CLI socket to this session.  Output bytes will arrive via
+   * `pushExternalData()` and writes initiated by daemon clients will be sent
+   * back through the socket so the wrapper can feed them to the local PTY.
+   * Input is bidirectional, so the session is treated as `owned` for UI
+   * purposes — the read-only banner won't show.
+   */
+  attachWrapper(socket: net.Socket): void {
+    this.wrapperSocket = socket;
+    this.owned = true;
+    this._info.owned = true;
+    this._info.status = 'active';
+  }
+
+  /** Feed raw output from a wrapper-CLI socket into this session's buffer. */
+  pushExternalData(data: string): void {
+    this._handleRawData(data, 'stdout');
   }
 
   /**
@@ -188,7 +210,7 @@ export class Session extends EventEmitter {
    * No-ops for external sessions (read-only).
    */
   write(data: string, clientId?: string): void {
-    if (!this.owned || !this.pty) {
+    if (!this.owned || (!this.pty && !this.wrapperSocket)) {
       logger.warn(
         `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? 'unknown'})`
       );
@@ -214,10 +236,25 @@ export class Session extends EventEmitter {
     this._info.lastActivityAt = Date.now();
     this.emit('data', [line]);
 
-    this.pty.write(data);
+    if (this.wrapperSocket) {
+      this.wrapperSocket.write(
+        JSON.stringify({
+          type: 'INPUT',
+          data: Buffer.from(data, 'utf8').toString('base64'),
+        }) + '\n'
+      );
+    } else if (this.pty) {
+      this.pty.write(data);
+    }
   }
 
   resize(cols: number, rows: number): void {
+    if (this.wrapperSocket) {
+      this.wrapperSocket.write(
+        JSON.stringify({ type: 'RESIZE', cols, rows }) + '\n'
+      );
+      return;
+    }
     if (!this.owned || !this.pty) return;
     this.pty.resize(cols, rows);
   }
@@ -240,6 +277,15 @@ export class Session extends EventEmitter {
     if (this.monitorStream) {
       this.monitorStream.destroy();
       this.monitorStream = null;
+    }
+
+    if (this.wrapperSocket) {
+      try {
+        this.wrapperSocket.destroy();
+      } catch {
+        // already closed
+      }
+      this.wrapperSocket = null;
     }
 
     this._info.status = 'ended';

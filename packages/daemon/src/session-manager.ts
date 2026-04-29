@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import * as net from 'net';
 import * as path from 'path';
 import { Session } from './session.js';
 import type { Session as SessionInfo } from './types.js';
@@ -53,6 +54,7 @@ export class SessionManager extends EventEmitter {
         lastActivityAt: session.info.lastActivityAt,
         lineCount: session.info.lineCount,
         status: session.info.status,
+        waitingForInput: session.info.waitingForInput,
       });
     });
 
@@ -84,6 +86,7 @@ export class SessionManager extends EventEmitter {
         lastActivityAt: session.info.lastActivityAt,
         lineCount: session.info.lineCount,
         status: session.info.status,
+        waitingForInput: session.info.waitingForInput,
       });
     });
 
@@ -95,6 +98,46 @@ export class SessionManager extends EventEmitter {
     await session.spawn();
 
     logger.info(`Spawned session: id=${session.id} cwd=${cwd} name=${name}`);
+    this.emit('session-added', session.info);
+
+    return session;
+  }
+
+  /**
+   * Create a session backed by a `walccy wrap` CLI socket.  The wrapper owns
+   * the actual PTY and forwards I/O over `socket`.
+   */
+  createWrappedSession(
+    pid: number,
+    cwd: string,
+    name: string | undefined,
+    socket: net.Socket
+  ): Session {
+    const finalName = name ?? this.deriveName(cwd);
+    const session = new Session(pid, cwd, finalName, this.maxBufferLines);
+    session.attachWrapper(socket);
+
+    this.sessions.set(session.id, session);
+    if (pid > 0) this.pidToSessionId.set(pid, session.id);
+
+    session.on('data', () => {
+      this.emit('session-updated', session.id, {
+        lastActivityAt: session.info.lastActivityAt,
+        lineCount: session.info.lineCount,
+        status: session.info.status,
+        waitingForInput: session.info.waitingForInput,
+      });
+    });
+
+    session.on('exit', () => {
+      logger.info(`Wrapped session ${session.id} (pid=${pid}) exited`);
+      this.removeSession(session.id);
+    });
+
+    logger.info(
+      `Wrapped session created: id=${session.id} pid=${pid} cwd=${cwd} name=${finalName}`
+    );
+
     this.emit('session-added', session.info);
 
     return session;
@@ -135,11 +178,9 @@ export class SessionManager extends EventEmitter {
     if (!session) return;
     const info = session.info;
     if (!info.connectedClients.includes(clientId)) {
-      // Mutate via updateStatus — we need to reach into the internal _info.
-      // Session exposes updateStatus; for connectedClients we emit update directly.
-      this.emit('session-updated', sessionId, {
-        connectedClients: [...info.connectedClients, clientId],
-      });
+      const updated = [...info.connectedClients, clientId];
+      session.setConnectedClients(updated);
+      this.emit('session-updated', sessionId, { connectedClients: updated });
     }
   }
 
@@ -148,6 +189,7 @@ export class SessionManager extends EventEmitter {
     if (!session) return;
     const info = session.info;
     const updated = info.connectedClients.filter((c) => c !== clientId);
+    session.setConnectedClients(updated);
     this.emit('session-updated', sessionId, { connectedClients: updated });
   }
 

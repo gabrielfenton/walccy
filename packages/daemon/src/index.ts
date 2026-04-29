@@ -314,6 +314,21 @@ program
     process.stdout.write(`[walccy] session unregistered: pid=${pid}\n`);
   });
 
+// ── wrap ──────────────────────────────────────
+// Mirror an existing terminal session to the daemon.
+
+program
+  .command('wrap')
+  .description(
+    'Run a command (default: claude) inside a PTY whose output is mirrored to the running daemon, so the mobile app can see it and send input back.'
+  )
+  .argument('[args...]', 'Command and arguments (defaults to "claude")')
+  .allowUnknownOption(true)
+  .action(async (args: string[]) => {
+    const { runWrapper } = await import('./wrap-cli.js');
+    await runWrapper(args ?? []);
+  });
+
 // ──────────────────────────────────────────────
 // Run
 // ──────────────────────────────────────────────
