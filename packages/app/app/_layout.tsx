@@ -2,8 +2,9 @@
 // Walccy — Root Layout
 // ──────────────────────────────────────────────
 
-import React, { useEffect } from 'react';
-import { StyleSheet } from 'react-native';
+import 'react-native-get-random-values';
+import React, { useEffect, useRef } from 'react';
+import { AppState, StyleSheet } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
@@ -13,8 +14,12 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { useSettingsStore } from '../stores/settings.store';
+import { useConnectionStore } from '../stores/connection.store';
 import { wsClient } from '../services/ws-client';
+import { clipboardService } from '../services/clipboard.service';
+import { requestNotificationPermissions } from '../services/notification.service';
 import { useKeepScreenOn } from '../hooks/useKeepScreenOn';
+import { ErrorBoundary } from '../components/ui/ErrorBoundary';
 
 // Keep the splash screen visible until fonts are ready (or we give up)
 SplashScreen.preventAutoHideAsync().catch(() => {
@@ -49,6 +54,45 @@ function RootLayoutInner(): React.ReactElement {
       });
     }
   }, [fontsLoaded]);
+
+  // Request notification permissions on mount
+  useEffect(() => {
+    requestNotificationPermissions().catch(() => {});
+  }, []);
+
+  // Handle app foreground/background transitions
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (
+        appStateRef.current.match(/inactive|background/) &&
+        nextState === 'active'
+      ) {
+        // App foregrounded — reconnect if we were connected
+        const { status } = useConnectionStore.getState();
+        if (status === 'disconnected' || status === 'error') {
+          const { savedHosts, lastConnectedHostId, autoReconnect } =
+            useSettingsStore.getState();
+          if (lastConnectedHostId && autoReconnect) {
+            const host = savedHosts.find((h) => h.id === lastConnectedHostId);
+            if (host) {
+              SecureStore.getItemAsync(`secret_${host.id}`)
+                .then((secret) => {
+                  if (secret) wsClient.connect(host.host, host.port, secret);
+                })
+                .catch(() => {});
+            }
+          }
+        }
+        clipboardService.startMonitoring();
+      } else if (nextState.match(/inactive|background/)) {
+        // App backgrounded — disconnect cleanly to save battery
+        clipboardService.stopMonitoring();
+      }
+      appStateRef.current = nextState;
+    });
+    return () => subscription.remove();
+  }, []);
 
   // Auto-reconnect to the last known host on mount
   useEffect(() => {
@@ -85,10 +129,12 @@ export default function RootLayout(): React.ReactElement {
   return (
     <GestureHandlerRootView style={styles.fill}>
       <SafeAreaProvider>
-        <BottomSheetModalProvider>
-          <StatusBar style="light" />
-          <RootLayoutInner />
-        </BottomSheetModalProvider>
+        <ErrorBoundary>
+          <BottomSheetModalProvider>
+            <StatusBar style="light" />
+            <RootLayoutInner />
+          </BottomSheetModalProvider>
+        </ErrorBoundary>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
