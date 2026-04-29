@@ -333,6 +333,34 @@ program
 // Run
 // ──────────────────────────────────────────────
 
+// Convenience shorthand: `walccy <bin> [args...]` is interpreted as
+// `walccy wrap <bin> [args...]` whenever <bin> isn't one of our own
+// subcommands.  This lets users type `walccy claude` instead of
+// `walccy wrap claude`.
+const KNOWN_SUBCOMMANDS = new Set<string>([
+  'start',
+  'stop',
+  'status',
+  'sessions',
+  'pair',
+  'config',
+  'init',
+  'install-service',
+  'uninstall',
+  'register-session',
+  'unregister-session',
+  'wrap',
+  'help',
+]);
+const firstArg = process.argv[2];
+if (
+  firstArg &&
+  !firstArg.startsWith('-') &&
+  !KNOWN_SUBCOMMANDS.has(firstArg)
+) {
+  process.argv.splice(2, 0, 'wrap');
+}
+
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err);
   process.exit(1);

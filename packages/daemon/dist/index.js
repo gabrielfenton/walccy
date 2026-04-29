@@ -2261,6 +2261,25 @@ program.command("wrap").description(
   const { runWrapper: runWrapper2 } = await Promise.resolve().then(() => (init_wrap_cli(), wrap_cli_exports));
   await runWrapper2(args ?? []);
 });
+var KNOWN_SUBCOMMANDS = /* @__PURE__ */ new Set([
+  "start",
+  "stop",
+  "status",
+  "sessions",
+  "pair",
+  "config",
+  "init",
+  "install-service",
+  "uninstall",
+  "register-session",
+  "unregister-session",
+  "wrap",
+  "help"
+]);
+var firstArg = process.argv[2];
+if (firstArg && !firstArg.startsWith("-") && !KNOWN_SUBCOMMANDS.has(firstArg)) {
+  process.argv.splice(2, 0, "wrap");
+}
 program.parseAsync(process.argv).catch((err) => {
   console.error(err);
   process.exit(1);
