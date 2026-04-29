@@ -20,6 +20,8 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
+import { TextInputModal } from '../ui/TextInputModal';
 import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import type { Prompt } from '../../stores/prompt-library.store';
 import { PromptSearchBar } from './PromptSearchBar';
@@ -225,6 +227,7 @@ export function PromptLibrarySheet({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewForm, setShowNewForm] = useState(false);
+  const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
 
   const {
     prompts,
@@ -235,7 +238,18 @@ export function PromptLibrarySheet({
     searchPrompts,
     getPinned,
     getRecent,
-  } = usePromptLibraryStore();
+  } = usePromptLibraryStore(
+    useShallow((s) => ({
+      prompts: s.prompts,
+      addPrompt: s.addPrompt,
+      updatePrompt: s.updatePrompt,
+      deletePrompt: s.deletePrompt,
+      recordUse: s.recordUse,
+      searchPrompts: s.searchPrompts,
+      getPinned: s.getPinned,
+      getRecent: s.getRecent,
+    }))
+  );
 
   // ── Slide animation ───────────────────────────
 
@@ -277,17 +291,7 @@ export function PromptLibrarySheet({
         {
           text: 'Edit',
           onPress: () => {
-            Alert.prompt(
-              'Edit title',
-              undefined,
-              (newTitle) => {
-                if (newTitle?.trim()) {
-                  updatePrompt(prompt.id, { title: newTitle.trim() });
-                }
-              },
-              'plain-text',
-              prompt.title
-            );
+            setEditingPrompt(prompt);
           },
         },
         {
@@ -316,6 +320,16 @@ export function PromptLibrarySheet({
       ]);
     },
     [updatePrompt, deletePrompt]
+  );
+
+  const handleEditTitleSubmit = useCallback(
+    (newTitle: string) => {
+      if (editingPrompt && newTitle.trim()) {
+        updatePrompt(editingPrompt.id, { title: newTitle.trim() });
+      }
+      setEditingPrompt(null);
+    },
+    [editingPrompt, updatePrompt]
   );
 
   const handleNewPromptSave = useCallback(
@@ -363,7 +377,8 @@ export function PromptLibrarySheet({
     }
 
     return items;
-  }, [searchQuery, prompts, searchPrompts, getPinned, getRecent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- store methods are stable via get()
+  }, [searchQuery, prompts]);
 
   const renderItem = useCallback(
     ({ item }: { item: ListItem }) => {
@@ -460,6 +475,15 @@ export function PromptLibrarySheet({
             style={styles.list}
           />
         </KeyboardAvoidingView>
+
+        {/* Edit title modal (cross-platform Alert.prompt replacement) */}
+        <TextInputModal
+          visible={editingPrompt !== null}
+          title="Edit title"
+          defaultValue={editingPrompt?.title ?? ''}
+          onSubmit={handleEditTitleSubmit}
+          onCancel={() => setEditingPrompt(null)}
+        />
       </Animated.View>
     </Modal>
   );

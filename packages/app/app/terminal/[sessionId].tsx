@@ -14,6 +14,7 @@ import {
   Vibration,
 } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
+import { useShallow } from 'zustand/react/shallow';
 import { useSessionsStore } from '../../stores/sessions.store';
 import { wsClient } from '../../services/ws-client';
 import { clipboardService } from '../../services/clipboard.service';
@@ -109,11 +110,13 @@ export default function TerminalSessionScreen(): React.ReactElement {
     : undefined;
   const hasSessions = Object.keys(sessions).length > 0;
 
-  const { fontSize, lineHeight, vibrationOnWaitingInput } = useSettingsStore((s) => ({
-    fontSize: s.fontSize,
-    lineHeight: s.lineHeight,
-    vibrationOnWaitingInput: s.vibrationOnWaitingInput,
-  }));
+  const { fontSize, lineHeight, vibrationOnWaitingInput } = useSettingsStore(
+    useShallow((s) => ({
+      fontSize: s.fontSize,
+      lineHeight: s.lineHeight,
+      vibrationOnWaitingInput: s.vibrationOnWaitingInput,
+    }))
+  );
 
   const [inputLockState, setInputLockState] = useState<InputLockState>({
     active: false,

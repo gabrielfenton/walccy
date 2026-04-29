@@ -15,11 +15,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
 import { Stack, router } from 'expo-router';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { useSessionsStore } from '../../stores/sessions.store';
 import { useConnectionStore, type ConnectionStatus } from '../../stores/connection.store';
+import { wsClient } from '../../services/ws-client';
 import { TabBar } from '../../components/sessions/TabBar';
 
 // ── Status badge ──────────────────────────────
@@ -54,20 +56,23 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => (
 // ── Header bar ────────────────────────────────
 
 const HeaderBar: React.FC = () => {
-  const { status, daemonHostname, latencyMs } = useConnectionStore((s) => ({
-    status: s.status,
-    daemonHostname: s.daemonHostname,
-    latencyMs: s.latencyMs,
-  }));
+  const { status, daemonHostname, latencyMs, lastError } = useConnectionStore(
+    useShallow((s) => ({
+      status: s.status,
+      daemonHostname: s.daemonHostname,
+      latencyMs: s.latencyMs,
+      lastError: s.lastError,
+    }))
+  );
 
   return (
     <View style={styles.headerBar}>
       {/* Left: Logo */}
       <Text style={styles.headerLogo}>⬡ Walccy</Text>
 
-      {/* Center: Hostname */}
-      <Text style={styles.headerHostname} numberOfLines={1}>
-        {daemonHostname ?? '—'}
+      {/* Center: Hostname or error message */}
+      <Text style={[styles.headerHostname, lastError ? styles.headerError : undefined]} numberOfLines={1}>
+        {lastError ?? daemonHostname ?? '—'}
       </Text>
 
       {/* Right: Status + latency + settings */}
@@ -94,7 +99,7 @@ const HeaderBar: React.FC = () => {
 // ── Layout ────────────────────────────────────
 
 export default function TerminalLayout(): React.ReactElement {
-  const sessions = useSessionsStore((s) => Object.values(s.sessions));
+  const sessions = useSessionsStore(useShallow((s) => Object.values(s.sessions)));
   const activeSessionId = useSessionsStore((s) => s.activeSessionId);
   const setActiveSession = useSessionsStore((s) => s.setActiveSession);
   const removeSession = useSessionsStore((s) => s.removeSession);
@@ -105,6 +110,7 @@ export default function TerminalLayout(): React.ReactElement {
   }
 
   function handleCloseSession(id: string): void {
+    wsClient.unsubscribe(id);
     removeSession(id);
     // If we removed the active session, navigate to no-session
     if (activeSessionId === id) {
@@ -188,6 +194,12 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.mono,
     fontSize: FontSize.caption,
     textAlign: 'center',
+  },
+
+  headerError: {
+    color: Colors.accentRed,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
   },
 
   headerRight: {

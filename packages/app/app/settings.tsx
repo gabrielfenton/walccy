@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { useShallow } from 'zustand/react/shallow';
 import { useSettingsStore } from '../stores/settings.store';
 import { useConnectionStore } from '../stores/connection.store';
 import { wsClient } from '../services/ws-client';
@@ -200,22 +201,26 @@ export default function SettingsScreen(): React.ReactElement {
     vibrationOnWaitingInput,
     showClipboardPopupOnCopy,
     updateSettings,
-  } = useSettingsStore((s) => ({
-    fontSize: s.fontSize,
-    fontFamily: s.fontFamily,
-    lineHeight: s.lineHeight,
-    scrollbackLines: s.scrollbackLines,
-    autoReconnect: s.autoReconnect,
-    keepScreenOn: s.keepScreenOn,
-    vibrationOnWaitingInput: s.vibrationOnWaitingInput,
-    showClipboardPopupOnCopy: s.showClipboardPopupOnCopy,
-    updateSettings: s.updateSettings,
-  }));
+  } = useSettingsStore(
+    useShallow((s) => ({
+      fontSize: s.fontSize,
+      fontFamily: s.fontFamily,
+      lineHeight: s.lineHeight,
+      scrollbackLines: s.scrollbackLines,
+      autoReconnect: s.autoReconnect,
+      keepScreenOn: s.keepScreenOn,
+      vibrationOnWaitingInput: s.vibrationOnWaitingInput,
+      showClipboardPopupOnCopy: s.showClipboardPopupOnCopy,
+      updateSettings: s.updateSettings,
+    }))
+  );
 
-  const { daemonHost, daemonVersion } = useConnectionStore((s) => ({
-    daemonHost: s.daemonHost,
-    daemonVersion: s.daemonVersion,
-  }));
+  const { daemonHost, daemonVersion } = useConnectionStore(
+    useShallow((s) => ({
+      daemonHost: s.daemonHost,
+      daemonVersion: s.daemonVersion,
+    }))
+  );
 
   const handleDisconnect = useCallback(() => {
     wsClient.disconnect();
