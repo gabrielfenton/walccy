@@ -25,8 +25,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // src/index.ts
 var import_commander = require("commander");
-var os4 = __toESM(require("os"));
-var path6 = __toESM(require("path"));
+var os5 = __toESM(require("os"));
+var path7 = __toESM(require("path"));
 
 // src/config.ts
 var fs = __toESM(require("fs"));
@@ -746,6 +746,200 @@ var crypto2 = __toESM(require("crypto"));
 var http = __toESM(require("http"));
 var import_ws = require("ws");
 var import_uuid2 = require("uuid");
+
+// src/directory-scanner.ts
+var fs4 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
+var os3 = __toESM(require("os"));
+var COMMON_DEV_ROOTS = [
+  "Documents",
+  "Documents/dev",
+  "Documents/code",
+  "Documents/projects",
+  "dev",
+  "code",
+  "src",
+  "projects",
+  "work",
+  "repos",
+  "workspace",
+  "go/src"
+];
+var MAX_DIRS_PER_ROOT = 200;
+var MAX_DEPTH = 3;
+var MAX_RESULTS = 80;
+var DirectoryScanner = class {
+  homeDir;
+  constructor() {
+    this.homeDir = os3.homedir();
+  }
+  // ────────────────────────────────────────────
+  // Public
+  // ────────────────────────────────────────────
+  scan(options = {}) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    out.push({
+      path: this.homeDir,
+      label: "~",
+      kind: "home",
+      detail: "Home directory"
+    });
+    seen.add(this.homeDir);
+    for (const cwd of options.recentCwds ?? []) {
+      if (seen.has(cwd)) continue;
+      if (!this.isReadableDir(cwd)) continue;
+      out.push({
+        path: cwd,
+        label: path5.basename(cwd) || cwd,
+        kind: "recent",
+        detail: this.friendlyParent(cwd)
+      });
+      seen.add(cwd);
+    }
+    for (const rel of COMMON_DEV_ROOTS) {
+      const root = path5.resolve(this.homeDir, rel);
+      if (!this.isReadableDir(root)) continue;
+      this.findGitRepos(root, 0, seen, out);
+      if (out.length >= MAX_RESULTS) break;
+    }
+    const q = options.query?.trim().toLowerCase();
+    const filtered = q ? out.filter(
+      (e) => e.path.toLowerCase().includes(q) || e.label.toLowerCase().includes(q)
+    ) : out;
+    return filtered.slice(0, MAX_RESULTS);
+  }
+  /**
+   * Validate a user-supplied path — used by SPAWN_SESSION before we hand it to
+   * node-pty. Expands `~`, resolves to absolute, and checks it exists.
+   * Returns the resolved path or null if invalid.
+   */
+  resolveAndValidate(input) {
+    if (!input || typeof input !== "string") return null;
+    const trimmed = input.trim();
+    if (trimmed.length === 0) return null;
+    let expanded = trimmed;
+    if (expanded === "~") {
+      expanded = this.homeDir;
+    } else if (expanded.startsWith("~/")) {
+      expanded = path5.join(this.homeDir, expanded.slice(2));
+    }
+    const resolved = path5.resolve(expanded);
+    if (!this.isReadableDir(resolved)) return null;
+    return resolved;
+  }
+  // ────────────────────────────────────────────
+  // Internals
+  // ────────────────────────────────────────────
+  findGitRepos(root, depth, seen, out) {
+    if (depth > MAX_DEPTH) return;
+    if (out.length >= MAX_RESULTS) return;
+    let entries;
+    try {
+      entries = fs4.readdirSync(root, { withFileTypes: true });
+    } catch (err) {
+      logger_default.debug(`directory-scanner: readdir failed for ${root}: ${String(err)}`);
+      return;
+    }
+    let visited = 0;
+    for (const entry of entries) {
+      if (visited >= MAX_DIRS_PER_ROOT) break;
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name === "node_modules") continue;
+      const full = path5.join(root, entry.name);
+      const gitDir = path5.join(full, ".git");
+      let isRepo = false;
+      try {
+        if (fs4.existsSync(gitDir)) isRepo = true;
+      } catch {
+      }
+      if (isRepo) {
+        if (!seen.has(full)) {
+          out.push({
+            path: full,
+            label: entry.name,
+            kind: "git",
+            detail: this.friendlyParent(full)
+          });
+          seen.add(full);
+        }
+      } else {
+        this.findGitRepos(full, depth + 1, seen, out);
+      }
+      visited++;
+      if (out.length >= MAX_RESULTS) return;
+    }
+  }
+  isReadableDir(p) {
+    try {
+      const stat = fs4.statSync(p);
+      return stat.isDirectory();
+    } catch {
+      return false;
+    }
+  }
+  /** Return parent path with $HOME collapsed to "~". */
+  friendlyParent(p) {
+    const parent = path5.dirname(p);
+    if (parent === this.homeDir) return "~";
+    if (parent.startsWith(this.homeDir + path5.sep)) {
+      return "~" + parent.slice(this.homeDir.length);
+    }
+    return parent;
+  }
+};
+function recentCwdsFromSessions(sessions) {
+  const sorted = [...sessions].sort(
+    (a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
+  );
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const s of sorted) {
+    if (!s.cwd) continue;
+    if (seen.has(s.cwd)) continue;
+    seen.add(s.cwd);
+    out.push(s.cwd);
+  }
+  return out;
+}
+
+// package.json
+var package_default = {
+  name: "walccyd",
+  version: "1.0.0",
+  private: true,
+  bin: {
+    walccy: "./dist/index.js"
+  },
+  main: "./dist/index.js",
+  scripts: {
+    dev: "tsx watch src/index.ts",
+    build: "tsup src/index.ts --format cjs --dts",
+    start: "node dist/index.js",
+    test: "vitest run"
+  },
+  dependencies: {
+    commander: "^12.1.0",
+    "node-pty": "^1.0.0",
+    "qrcode-terminal": "^0.12.0",
+    uuid: "^10.0.0",
+    winston: "^3.13.0",
+    ws: "^8.17.0"
+  },
+  devDependencies: {
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.10",
+    tsup: "^8.1.0",
+    tsx: "^4.15.0",
+    typescript: "^5.5.0",
+    vitest: "^4.1.2"
+  }
+};
+
+// src/ws-server.ts
+var DAEMON_VERSION = package_default.version;
 var INPUT_LOCK_TTL_MS = 2e3;
 var WsServer = class _WsServer {
   constructor(sessionManager, config, bindAddress, pushService) {
@@ -762,6 +956,7 @@ var WsServer = class _WsServer {
   wss = null;
   clients = /* @__PURE__ */ new Map();
   inputLocks = /* @__PURE__ */ new Map();
+  directoryScanner = new DirectoryScanner();
   // ────────────────────────────────────────────
   // Lifecycle
   // ────────────────────────────────────────────
@@ -775,12 +970,12 @@ var WsServer = class _WsServer {
     this.wss.on("connection", (ws) => {
       this._handleConnection(ws);
     });
-    await new Promise((resolve2, reject) => {
+    await new Promise((resolve3, reject) => {
       this.httpServer.listen(this.config.port, this.bindAddress, () => {
         logger_default.info(
           `WebSocket server listening on ws://${this.bindAddress}:${this.config.port}`
         );
-        resolve2();
+        resolve3();
       });
       this.httpServer.once("error", reject);
     });
@@ -934,6 +1129,12 @@ var WsServer = class _WsServer {
       case "REGISTER_PUSH_TOKEN":
         this._handleRegisterPushToken(client, typed);
         break;
+      case "LIST_DIRECTORIES":
+        this._handleListDirectories(client, typed);
+        break;
+      case "SPAWN_SESSION":
+        void this._handleSpawnSession(client, typed);
+        break;
       default:
         this._sendError(client.ws, "UNKNOWN_TYPE", "Unknown message type");
     }
@@ -961,6 +1162,10 @@ var WsServer = class _WsServer {
         return typeof m.sessionId === "string" && typeof m.cols === "number" && Number.isInteger(m.cols) && m.cols > 0 && m.cols <= 1e3 && typeof m.rows === "number" && Number.isInteger(m.rows) && m.rows > 0 && m.rows <= 500;
       case "REGISTER_PUSH_TOKEN":
         return typeof m.token === "string" && m.token.length > 0 && (m.platform === "android" || m.platform === "ios");
+      case "LIST_DIRECTORIES":
+        return m.query === void 0 || typeof m.query === "string";
+      case "SPAWN_SESSION":
+        return typeof m.cwd === "string" && m.cwd.length > 0 && m.cwd.length <= 4096 && typeof m.requestId === "string" && m.requestId.length > 0;
       default:
         return true;
     }
@@ -988,7 +1193,7 @@ var WsServer = class _WsServer {
       clearTimeout(client.authTimeout);
       client.authTimeout = void 0;
     }
-    const ok = { type: "AUTH_OK", clientId: client.id };
+    const ok = { type: "AUTH_OK", clientId: client.id, daemonVersion: DAEMON_VERSION };
     this._send(client.ws, ok);
     logger_default.info(`WS client authenticated: ${client.id} (${client.name})`);
   }
@@ -1065,6 +1270,50 @@ var WsServer = class _WsServer {
       this.pushService.registerToken(client.id, msg.token, msg.platform);
     }
   }
+  _handleListDirectories(client, msg) {
+    const recentCwds = recentCwdsFromSessions(
+      this.sessionManager.getAllSessions().map((s) => s.info)
+    );
+    const directories = this.directoryScanner.scan({
+      recentCwds,
+      query: msg.query
+    });
+    const reply = { type: "DIRECTORY_LIST", directories };
+    this._send(client.ws, reply);
+  }
+  async _handleSpawnSession(client, msg) {
+    const cwd = this.directoryScanner.resolveAndValidate(msg.cwd);
+    if (!cwd) {
+      const reply = {
+        type: "SPAWN_RESULT",
+        requestId: msg.requestId,
+        error: `Directory not accessible: ${msg.cwd}`
+      };
+      this._send(client.ws, reply);
+      return;
+    }
+    try {
+      const session = await this.sessionManager.spawnSession(cwd);
+      const reply = {
+        type: "SPAWN_RESULT",
+        requestId: msg.requestId,
+        sessionId: session.id
+      };
+      this._send(client.ws, reply);
+      logger_default.info(
+        `Spawn requested by ${client.id} (${client.name}) cwd=${cwd} \u2192 session ${session.id}`
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger_default.warn(`Spawn failed for ${client.id} cwd=${cwd}: ${reason}`);
+      const reply = {
+        type: "SPAWN_RESULT",
+        requestId: msg.requestId,
+        error: reason
+      };
+      this._send(client.ws, reply);
+    }
+  }
   // ────────────────────────────────────────────
   // Sending helpers
   // ────────────────────────────────────────────
@@ -1107,7 +1356,7 @@ var WsServer = class _WsServer {
 };
 
 // src/push.ts
-var fs4 = __toESM(require("fs"));
+var fs5 = __toESM(require("fs"));
 var https = __toESM(require("https"));
 var crypto3 = __toESM(require("crypto"));
 function base64url(buf) {
@@ -1134,7 +1383,7 @@ function createJwt(sa) {
 }
 async function getAccessToken(sa) {
   const jwt = createJwt(sa);
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     const body = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
     const url = new URL(sa.token_uri);
     const req = https.request(
@@ -1154,7 +1403,7 @@ async function getAccessToken(sa) {
           try {
             const parsed = JSON.parse(data);
             if (parsed.access_token) {
-              resolve2(parsed.access_token);
+              resolve3(parsed.access_token);
             } else {
               reject(new Error(`OAuth token response missing access_token: ${data}`));
             }
@@ -1178,8 +1427,8 @@ var PushService = class {
   constructor(serviceAccountPath) {
     const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
     try {
-      if (fs4.existsSync(saPath)) {
-        const raw = fs4.readFileSync(saPath, "utf-8");
+      if (fs5.existsSync(saPath)) {
+        const raw = fs5.readFileSync(saPath, "utf-8");
         this.serviceAccount = JSON.parse(raw);
         logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
       } else {
@@ -1239,7 +1488,7 @@ var PushService = class {
         ...data ? { data } : {}
       }
     };
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       const payload = JSON.stringify(message);
       const req = https.request(
         {
@@ -1258,7 +1507,7 @@ var PushService = class {
           res.on("end", () => {
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
               logger_default.debug(`FCM push sent to ${pushToken.clientId}`);
-              resolve2();
+              resolve3();
             } else {
               logger_default.warn(
                 `FCM push failed (${res.statusCode}): ${responseData}`
@@ -1271,14 +1520,14 @@ var PushService = class {
                   this.pushTokens.delete(pushToken.clientId);
                 }
               }
-              resolve2();
+              resolve3();
             }
           });
         }
       );
       req.on("error", (err) => {
         logger_default.warn(`FCM request error: ${err.message}`);
-        resolve2();
+        resolve3();
       });
       req.write(payload);
       req.end();
@@ -1328,7 +1577,7 @@ async function waitForTailscale(intervalMs = 1e4, maxRetries = 30) {
   );
 }
 function delay(ms) {
-  return new Promise((resolve2) => setTimeout(resolve2, ms));
+  return new Promise((resolve3) => setTimeout(resolve3, ms));
 }
 
 // src/daemon.ts
@@ -1388,21 +1637,21 @@ var Daemon = class {
 };
 
 // src/installer.ts
-var fs5 = __toESM(require("fs"));
-var path5 = __toESM(require("path"));
-var os3 = __toESM(require("os"));
+var fs6 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
+var os4 = __toESM(require("os"));
 var import_child_process2 = require("child_process");
 var import_util2 = require("util");
 var execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
 function getServiceDir() {
-  return path5.join(os3.homedir(), ".config", "systemd", "user");
+  return path6.join(os4.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path5.join(getServiceDir(), "walccy.service");
+  return path6.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path5.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path6.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -1425,10 +1674,10 @@ WantedBy=default.target
 async function installSystemdService() {
   const serviceDir = getServiceDir();
   const servicePath = getServicePath();
-  if (!fs5.existsSync(serviceDir)) {
-    fs5.mkdirSync(serviceDir, { recursive: true });
+  if (!fs6.existsSync(serviceDir)) {
+    fs6.mkdirSync(serviceDir, { recursive: true });
   }
-  fs5.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
+  fs6.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
   console.log(`Wrote systemd unit: ${servicePath}`);
   try {
     await execFileAsync2("systemctl", ["--user", "daemon-reload"]);
@@ -1452,8 +1701,8 @@ async function uninstallSystemdService() {
     await execFileAsync2("systemctl", ["--user", "disable", "walccy.service"]);
   } catch {
   }
-  if (fs5.existsSync(servicePath)) {
-    fs5.unlinkSync(servicePath);
+  if (fs6.existsSync(servicePath)) {
+    fs6.unlinkSync(servicePath);
     console.log(`Removed systemd unit: ${servicePath}`);
   } else {
     console.log("No systemd unit file found.");
@@ -1466,7 +1715,7 @@ async function uninstallSystemdService() {
 }
 async function getServiceStatus() {
   const servicePath = getServicePath();
-  if (!fs5.existsSync(servicePath)) {
+  if (!fs6.existsSync(servicePath)) {
     return "not-installed";
   }
   try {
@@ -1586,7 +1835,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os4.hostname();
+  const hostname2 = os5.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -1645,15 +1894,15 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path6.dirname(configPath);
-        const fs6 = await import("fs");
-        if (fs6.existsSync(configDir)) {
-          fs6.rmSync(configDir, { recursive: true, force: true });
+        const configDir = path7.dirname(configPath);
+        const fs7 = await import("fs");
+        if (fs7.existsSync(configDir)) {
+          fs7.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path6.join(os4.homedir(), ".walccy");
-        if (fs6.existsSync(logDir2)) {
-          fs6.rmSync(logDir2, { recursive: true, force: true });
+        const logDir2 = path7.join(os5.homedir(), ".walccy");
+        if (fs7.existsSync(logDir2)) {
+          fs7.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");

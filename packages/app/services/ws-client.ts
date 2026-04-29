@@ -10,8 +10,11 @@ import { outputStore } from '../stores/output.store';
 import {
   WS_RECONNECT_DELAYS,
   PING_INTERVAL,
+  AUTH_TIMEOUT,
 } from '../constants/config';
-import type { ServerMessage } from '../types';
+import { scheduleLocalNotification } from './notification.service';
+import { getPushToken } from './push-token';
+import type { ServerMessage, DirectoryEntry } from '../types';
 
 // ──────────────────────────────────────────────
 // Persistent client identity
@@ -36,6 +39,7 @@ class WsClient {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private pingTimeout: ReturnType<typeof setTimeout> | null = null;
   private pingSentAt = 0;
+  private authTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Listeners registered via onMessage() */
   private messageListeners: Set<(msg: ServerMessage) => void> = new Set();
@@ -60,6 +64,19 @@ class WsClient {
 
   /** Sessions we should be subscribed to (survives reconnects) */
   private activeSubscriptions: Map<string, number | undefined> = new Map();
+
+  /** Pending SPAWN_SESSION requests, keyed by requestId. */
+  private pendingSpawns: Map<
+    string,
+    { resolve: (sessionId: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
+  > = new Map();
+
+  /** Pending LIST_DIRECTORIES request — at most one in flight. */
+  private pendingDirectoryListing: {
+    resolve: (entries: DirectoryEntry[]) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
   // ── Public API ────────────────────────────────
 
@@ -88,6 +105,8 @@ class WsClient {
     this.reconnectAttempt = 0;
     this.clearReconnectTimer();
     this.stopPing();
+    this.activeSubscriptions.clear();
+    this.rejectPending(new Error('Disconnected'));
 
     if (this.ws) {
       this.ws.onclose = null;
@@ -126,6 +145,47 @@ class WsClient {
     this.send({ type: 'LIST_SESSIONS' });
   }
 
+  /**
+   * Ask the daemon for a directory suggestion list (recent cwds + git repos).
+   * Resolves with the entries, or rejects on timeout / disconnect.
+   */
+  listDirectories(query?: string, timeoutMs = 8000): Promise<DirectoryEntry[]> {
+    // Cancel any prior pending request
+    if (this.pendingDirectoryListing) {
+      clearTimeout(this.pendingDirectoryListing.timer);
+      this.pendingDirectoryListing.reject(new Error('Superseded by newer listDirectories'));
+      this.pendingDirectoryListing = null;
+    }
+
+    return new Promise<DirectoryEntry[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingDirectoryListing) {
+          this.pendingDirectoryListing = null;
+          reject(new Error('Timed out waiting for directory list'));
+        }
+      }, timeoutMs);
+      this.pendingDirectoryListing = { resolve, reject, timer };
+      this.send({ type: 'LIST_DIRECTORIES', ...(query ? { query } : {}) });
+    });
+  }
+
+  /**
+   * Spawn a new claude session on the daemon at the given cwd.
+   * Resolves with the new sessionId, or rejects on timeout / failure.
+   */
+  spawnSession(cwd: string, timeoutMs = 15000): Promise<string> {
+    const requestId = uuid();
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingSpawns.delete(requestId)) {
+          reject(new Error('Timed out spawning session'));
+        }
+      }, timeoutMs);
+      this.pendingSpawns.set(requestId, { resolve, reject, timer });
+      this.send({ type: 'SPAWN_SESSION', cwd, requestId });
+    });
+  }
+
   // ── Private helpers ───────────────────────────
 
   private openSocket(): void {
@@ -145,6 +205,19 @@ class WsClient {
           clientId: this.clientId,
           clientName: this.clientName,
         });
+
+        // Enforce auth timeout — if no AUTH_OK/AUTH_FAIL arrives, close
+        this.authTimeoutTimer = setTimeout(() => {
+          console.warn('[WsClient] Auth timeout — no response from daemon');
+          if (this.ws) {
+            this.ws.onclose = null;
+            this.ws.onerror = null;
+            this.ws.close();
+            this.ws = null;
+          }
+          connectionStore.getState().setDisconnected('Auth timeout');
+          this.reconnect();
+        }, AUTH_TIMEOUT);
       };
 
       ws.onmessage = (event: MessageEvent) => {
@@ -186,13 +259,12 @@ class WsClient {
 
     switch (msg.type) {
       case 'AUTH_OK': {
+        this.clearAuthTimeout();
         connectionStore.getState().setConnected(
           this.currentHost!,
           this.currentPort!,
-          // AUTH_OK carries the clientId echoed back; hostname comes in a future
-          // handshake extension — use host as hostname for now
           this.currentHost!,
-          '1.0.0'
+          msg.daemonVersion
         );
         this.startPing();
         // Immediately fetch session list
@@ -205,10 +277,13 @@ class WsClient {
             ...(fromLine !== undefined ? { fromLine } : {}),
           });
         }
+        // Register push token for FCM notifications
+        this.registerPushToken();
         break;
       }
 
       case 'AUTH_FAIL': {
+        this.clearAuthTimeout();
         connectionStore.getState().setDisconnected(msg.reason ?? 'Authentication failed');
         // Don't reconnect on auth failure
         this.clearReconnectTimer();
@@ -231,6 +306,17 @@ class WsClient {
       }
 
       case 'SESSION_UPDATED': {
+        // Detect waitingForInput transition (false → true) to fire notification
+        if (msg.changes.waitingForInput === true) {
+          const prev = sessionsStore.getState().sessions[msg.sessionId];
+          if (prev && !prev.waitingForInput) {
+            const name = prev.name || 'Claude';
+            scheduleLocalNotification(
+              `${name} needs input`,
+              'Claude has finished its task and is waiting for your response.'
+            ).catch(() => {});
+          }
+        }
         sessionsStore.getState().updateSession(msg.sessionId, msg.changes);
         break;
       }
@@ -271,6 +357,29 @@ class WsClient {
         break;
       }
 
+      case 'DIRECTORY_LIST': {
+        if (this.pendingDirectoryListing) {
+          clearTimeout(this.pendingDirectoryListing.timer);
+          this.pendingDirectoryListing.resolve(msg.directories);
+          this.pendingDirectoryListing = null;
+        }
+        break;
+      }
+
+      case 'SPAWN_RESULT': {
+        const pending = this.pendingSpawns.get(msg.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingSpawns.delete(msg.requestId);
+          if (msg.sessionId) {
+            pending.resolve(msg.sessionId);
+          } else {
+            pending.reject(new Error(msg.error ?? 'Spawn failed'));
+          }
+        }
+        break;
+      }
+
       default: {
         // Exhaustive check — TypeScript will flag unhandled cases
         const _exhaustive: never = msg;
@@ -292,6 +401,43 @@ class WsClient {
       this.reconnectTimer = null;
       this.openSocket();
     }, delay);
+  }
+
+  private registerPushToken(): void {
+    getPushToken()
+      .then((result) => {
+        if (result) {
+          this.send({
+            type: 'REGISTER_PUSH_TOKEN',
+            token: result.token,
+            platform: result.platform,
+          });
+          console.log(`[WsClient] Push token registered (${result.platform})`);
+        }
+      })
+      .catch((err) => {
+        console.warn('[WsClient] Failed to register push token:', err);
+      });
+  }
+
+  private rejectPending(err: Error): void {
+    for (const [id, pending] of Array.from(this.pendingSpawns.entries())) {
+      clearTimeout(pending.timer);
+      pending.reject(err);
+      this.pendingSpawns.delete(id);
+    }
+    if (this.pendingDirectoryListing) {
+      clearTimeout(this.pendingDirectoryListing.timer);
+      this.pendingDirectoryListing.reject(err);
+      this.pendingDirectoryListing = null;
+    }
+  }
+
+  private clearAuthTimeout(): void {
+    if (this.authTimeoutTimer) {
+      clearTimeout(this.authTimeoutTimer);
+      this.authTimeoutTimer = null;
+    }
   }
 
   private clearReconnectTimer(): void {

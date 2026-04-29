@@ -76,6 +76,20 @@ export interface RegisterPushTokenMessage {
   platform: 'android' | 'ios';
 }
 
+export interface ListDirectoriesMessage {
+  type: 'LIST_DIRECTORIES';
+  /** Optional substring filter applied server-side. */
+  query?: string;
+}
+
+export interface SpawnSessionMessage {
+  type: 'SPAWN_SESSION';
+  /** Absolute working directory for the new session. */
+  cwd: string;
+  /** Client-generated correlation id, echoed back in SPAWN_RESULT. */
+  requestId: string;
+}
+
 export type ClientMessage =
   | AuthMessage
   | ListSessionsMessage
@@ -84,7 +98,9 @@ export type ClientMessage =
   | InputMessage
   | ResizeMessage
   | PingMessage
-  | RegisterPushTokenMessage;
+  | RegisterPushTokenMessage
+  | ListDirectoriesMessage
+  | SpawnSessionMessage;
 
 // ──────────────────────────────────────────────
 // WebSocket message types  (Daemon → Client)
@@ -93,6 +109,7 @@ export type ClientMessage =
 export interface AuthOkMessage {
   type: 'AUTH_OK';
   clientId: string;
+  daemonVersion: string;
 }
 
 export interface AuthFailMessage {
@@ -153,6 +170,33 @@ export interface ErrorMessage {
   message: string;
 }
 
+export type DirectoryEntryKind = 'recent' | 'git' | 'home' | 'custom';
+
+export interface DirectoryEntry {
+  /** Absolute path. */
+  path: string;
+  /** Display label (usually basename, or a friendly tag). */
+  label: string;
+  /** Where this suggestion came from. */
+  kind: DirectoryEntryKind;
+  /** Optional secondary text — e.g., parent dir or git branch. */
+  detail?: string;
+}
+
+export interface DirectoryListMessage {
+  type: 'DIRECTORY_LIST';
+  directories: DirectoryEntry[];
+}
+
+export interface SpawnResultMessage {
+  type: 'SPAWN_RESULT';
+  requestId: string;
+  /** Set on success — id of the new session. */
+  sessionId?: string;
+  /** Set on failure — short reason. */
+  error?: string;
+}
+
 export type ServerMessage =
   | AuthOkMessage
   | AuthFailMessage
@@ -164,4 +208,6 @@ export type ServerMessage =
   | OutputMessage
   | InputLockMessage
   | PongMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | DirectoryListMessage
+  | SpawnResultMessage;

@@ -6,9 +6,8 @@
 //   3. Stack navigator for session content
 // ──────────────────────────────────────────────
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  Alert,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -23,6 +22,7 @@ import { useSessionsStore } from '../../stores/sessions.store';
 import { useConnectionStore, type ConnectionStatus } from '../../stores/connection.store';
 import { wsClient } from '../../services/ws-client';
 import { TabBar } from '../../components/sessions/TabBar';
+import { NewSessionSheet } from '../../components/sessions/NewSessionSheet';
 
 // ── Status badge ──────────────────────────────
 
@@ -78,7 +78,7 @@ const HeaderBar: React.FC = () => {
       {/* Right: Status + latency + settings */}
       <View style={styles.headerRight}>
         <StatusBadge status={status} />
-        {latencyMs != null && (
+        {latencyMs != null && latencyMs < 5000 && status === 'connected' && (
           <Text style={styles.latencyText}>{latencyMs}ms</Text>
         )}
         <TouchableOpacity
@@ -104,6 +104,8 @@ export default function TerminalLayout(): React.ReactElement {
   const setActiveSession = useSessionsStore((s) => s.setActiveSession);
   const removeSession = useSessionsStore((s) => s.removeSession);
 
+  const [newSessionSheetVisible, setNewSessionSheetVisible] = useState(false);
+
   function handleSelectSession(id: string): void {
     setActiveSession(id);
     router.push(`/terminal/${id}`);
@@ -119,22 +121,15 @@ export default function TerminalLayout(): React.ReactElement {
   }
 
   function handleAddSession(): void {
-    Alert.alert(
-      'New Session',
-      'Start a new session on the connected machine?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'New Session',
-          onPress: () => {
-            // Navigate to a new-session screen or show an input prompt.
-            // The actual session creation is handled by the daemon;
-            // here we navigate to a placeholder until it appears.
-            router.push('/terminal/new');
-          },
-        },
-      ]
-    );
+    setNewSessionSheetVisible(true);
+  }
+
+  function handleSessionSpawned(sessionId: string): void {
+    // Daemon also broadcasts SESSION_ADDED so it'll appear in the tab bar.
+    // Mark it active and navigate so the user lands on it immediately.
+    setActiveSession(sessionId);
+    wsClient.subscribe(sessionId);
+    router.push(`/terminal/${sessionId}`);
   }
 
   return (
@@ -155,6 +150,12 @@ export default function TerminalLayout(): React.ReactElement {
       <View style={styles.content}>
         <Stack screenOptions={{ headerShown: false }} />
       </View>
+
+      <NewSessionSheet
+        isVisible={newSessionSheetVisible}
+        onClose={() => setNewSessionSheetVisible(false)}
+        onSpawned={handleSessionSpawned}
+      />
     </SafeAreaView>
   );
 }

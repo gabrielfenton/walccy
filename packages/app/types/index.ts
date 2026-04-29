@@ -81,6 +81,17 @@ export interface RegisterPushTokenMessage {
   platform: 'android' | 'ios';
 }
 
+export interface ListDirectoriesMessage {
+  type: 'LIST_DIRECTORIES';
+  query?: string;
+}
+
+export interface SpawnSessionMessage {
+  type: 'SPAWN_SESSION';
+  cwd: string;
+  requestId: string;
+}
+
 export type ClientMessage =
   | AuthMessage
   | ListSessionsMessage
@@ -89,7 +100,9 @@ export type ClientMessage =
   | InputMessage
   | ResizeMessage
   | PingMessage
-  | RegisterPushTokenMessage;
+  | RegisterPushTokenMessage
+  | ListDirectoriesMessage
+  | SpawnSessionMessage;
 
 // ──────────────────────────────────────────────
 // WebSocket message types  (Daemon → Client)
@@ -98,6 +111,7 @@ export type ClientMessage =
 export interface AuthOkMessage {
   type: 'AUTH_OK';
   clientId: string;
+  daemonVersion: string;
 }
 
 export interface AuthFailMessage {
@@ -158,6 +172,27 @@ export interface ErrorMessage {
   message: string;
 }
 
+export type DirectoryEntryKind = 'recent' | 'git' | 'home' | 'custom';
+
+export interface DirectoryEntry {
+  path: string;
+  label: string;
+  kind: DirectoryEntryKind;
+  detail?: string;
+}
+
+export interface DirectoryListMessage {
+  type: 'DIRECTORY_LIST';
+  directories: DirectoryEntry[];
+}
+
+export interface SpawnResultMessage {
+  type: 'SPAWN_RESULT';
+  requestId: string;
+  sessionId?: string;
+  error?: string;
+}
+
 export type ServerMessage =
   | AuthOkMessage
   | AuthFailMessage
@@ -169,4 +204,6 @@ export type ServerMessage =
   | OutputMessage
   | InputLockMessage
   | PongMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | DirectoryListMessage
+  | SpawnResultMessage;

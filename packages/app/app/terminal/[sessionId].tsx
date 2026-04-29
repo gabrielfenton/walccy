@@ -294,19 +294,19 @@ export default function TerminalSessionScreen(): React.ReactElement {
         onDismiss={handleBubbleDismiss}
       />
 
-      {/* Control bar */}
-      <ControlBar
-        sessionId={sessionId ?? ''}
-        onOpenPromptLibrary={handleOpenPromptLibrary}
-        onOpenClipboard={handleOpenClipboard}
-      />
-
-      {/* Input bar — hidden for read-only external sessions */}
+      {/* Control bar + input — both hidden for read-only external sessions */}
       {!isReadOnly && (
-        <InputBar
-          sessionId={sessionId ?? ''}
-          waitingForInput={session?.waitingForInput ?? false}
-        />
+        <>
+          <ControlBar
+            sessionId={sessionId ?? ''}
+            onOpenPromptLibrary={handleOpenPromptLibrary}
+            onOpenClipboard={handleOpenClipboard}
+          />
+          <InputBar
+            sessionId={sessionId ?? ''}
+            waitingForInput={session?.waitingForInput ?? false}
+          />
+        </>
       )}
 
       {/* Clipboard popup — shown on terminal text long-press */}

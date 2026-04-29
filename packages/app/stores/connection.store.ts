@@ -25,7 +25,10 @@ export const useConnectionStore = create<ConnectionStore>((set) => ({
   latencyMs: null,
   lastError: null,
 
-  setStatus: (status) => set({ status }),
+  setStatus: (status) =>
+    // Clear stale latency whenever we leave the connected state so the header
+    // doesn't show a stale "22000ms" while reconnecting.
+    set({ status, ...(status !== 'connected' ? { latencyMs: null } : {}) }),
 
   setConnected: (host, port, hostname, version) =>
     set({
@@ -40,9 +43,8 @@ export const useConnectionStore = create<ConnectionStore>((set) => ({
   setDisconnected: (error) =>
     set({
       status: error ? 'error' : 'disconnected',
-      daemonHost: null,
-      daemonHostname: null,
-      daemonVersion: null,
+      // Keep daemonHost/daemonHostname/daemonVersion as last-known so the UI
+      // doesn't briefly flash "Not connected" between disconnect and reconnect.
       latencyMs: null,
       lastError: error ?? null,
     }),
