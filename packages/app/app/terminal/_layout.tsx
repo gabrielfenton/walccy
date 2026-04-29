@@ -9,12 +9,12 @@
 import React from 'react';
 import {
   Alert,
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import { Stack, router } from 'expo-router';
 import { Colors } from '../../constants/colors';
@@ -138,7 +138,7 @@ export default function TerminalLayout(): React.ReactElement {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       {/* Header */}
       <HeaderBar />
 

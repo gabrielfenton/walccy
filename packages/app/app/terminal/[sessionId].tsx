@@ -48,10 +48,12 @@ interface InputLockState {
 function EmptyState(): React.ReactElement {
   return (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyIcon}>▶</Text>
+      <View style={styles.emptyIconCircle}>
+        <Text style={styles.emptyIcon}>▶</Text>
+      </View>
       <Text style={styles.emptyTitle}>No Claude Code sessions</Text>
       <Text style={styles.emptySubtitle}>
-        Start claude in your terminal to see it here
+        Run <Text style={styles.emptyCode}>claude</Text> in a terminal on your connected machine to see it here.
       </Text>
       <TouchableOpacity
         style={styles.refreshButton}
@@ -360,17 +362,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
-    gap: 12,
+    gap: 14,
+  },
+  emptyIconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: Colors.accent + '1A',
+    borderWidth: 1,
+    borderColor: Colors.accent + '40',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
   },
   emptyIcon: {
-    color: Colors.textSecondary,
-    fontSize: 48,
-    marginBottom: 8,
+    color: Colors.accent,
+    fontSize: 28,
+    marginLeft: 4,
   },
   emptyTitle: {
     color: Colors.textPrimary,
     fontFamily: FontFamily.ui,
     fontSize: FontSize.heading,
+    fontWeight: '600',
     textAlign: 'center',
   },
   emptySubtitle: {
@@ -379,13 +393,19 @@ const styles = StyleSheet.create({
     fontSize: FontSize.body,
     textAlign: 'center',
     lineHeight: 20,
+    maxWidth: 320,
+  },
+  emptyCode: {
+    fontFamily: FontFamily.mono,
+    color: Colors.textPrimary,
+    backgroundColor: Colors.surface,
   },
   refreshButton: {
     marginTop: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 10,
+    paddingHorizontal: 28,
+    paddingVertical: 11,
     backgroundColor: Colors.accent,
-    borderRadius: 8,
+    borderRadius: 10,
   },
   refreshButtonText: {
     color: Colors.textPrimary,

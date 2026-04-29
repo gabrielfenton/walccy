@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useShallow } from 'zustand/react/shallow';
 import { useSettingsStore } from '../stores/settings.store';
@@ -234,7 +235,7 @@ export default function SettingsScreen(): React.ReactElement {
   }, []);
 
   return (
-    <View style={styles.root}>
+    <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -348,7 +349,7 @@ export default function SettingsScreen(): React.ReactElement {
 
         <View style={styles.bottomPadding} />
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 

@@ -62,13 +62,17 @@ function loadConfig() {
     ...DEFAULTS,
     ...saved
   };
+  let needsSave = false;
   if (!merged.authSecret) {
     merged.authSecret = crypto.randomBytes(32).toString("hex");
+    needsSave = true;
   }
-  if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
+  if (needsSave || !fs.existsSync(configPath)) {
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    saveConfig(merged);
   }
-  saveConfig(merged);
   return merged;
 }
 function saveConfig(config) {
@@ -101,16 +105,22 @@ function stripAnsi(str) {
   return str.replace(ANSI_REGEX, "");
 }
 var LineBuffer = class {
-  lines = [];
+  /** Fixed-size ring buffer. Slots may be undefined until filled. */
+  ring;
   maxLines;
+  /** Write position (next slot to write to). */
+  head = 0;
+  /** Number of items currently stored. */
+  count = 0;
   totalReceived = 0;
-  // Global monotonically increasing line index (never resets)
+  /** Global monotonically increasing line index (never resets). */
   nextIndex = 0;
   constructor(maxLines = 1e4) {
     this.maxLines = maxLines;
+    this.ring = new Array(maxLines);
   }
   /**
-   * Append a new line to the buffer. Returns the stored BufferedLine.
+   * Append a new line to the buffer (O(1)). Returns the stored BufferedLine.
    */
   push(line) {
     const stored = {
@@ -118,45 +128,65 @@ var LineBuffer = class {
       index: this.nextIndex++,
       content: stripAnsi(line.rawContent)
     };
-    this.lines.push(stored);
+    this.ring[this.head] = stored;
+    this.head = (this.head + 1) % this.maxLines;
     this.totalReceived++;
-    if (this.lines.length > this.maxLines) {
-      this.lines.shift();
+    if (this.count < this.maxLines) {
+      this.count++;
     }
     return stored;
   }
   /**
    * Return lines starting from `fromIndex` (global index), up to `count` lines.
-   * If `fromIndex` is undefined, returns from the start of the current buffer.
-   * If `count` is undefined, returns all available lines from `fromIndex`.
+   * Uses binary search on the sorted index field for O(log n) lookup.
    */
   getLines(fromIndex, count) {
-    let result = this.lines;
+    const ordered = this._getOrdered();
     if (fromIndex !== void 0) {
-      result = result.filter((l) => l.index >= fromIndex);
+      let lo = 0;
+      let hi = ordered.length;
+      while (lo < hi) {
+        const mid = lo + hi >>> 1;
+        if (ordered[mid].index < fromIndex) lo = mid + 1;
+        else hi = mid;
+      }
+      const result = ordered.slice(lo);
+      return count !== void 0 ? result.slice(0, count) : result;
     }
-    if (count !== void 0) {
-      result = result.slice(0, count);
-    }
-    return result;
+    return count !== void 0 ? ordered.slice(0, count) : ordered;
   }
   /**
    * Return the most recent `count` lines.
    */
   getRecent(count) {
-    if (count >= this.lines.length) {
-      return [...this.lines];
+    const ordered = this._getOrdered();
+    if (count >= ordered.length) {
+      return ordered;
     }
-    return this.lines.slice(this.lines.length - count);
+    return ordered.slice(ordered.length - count);
   }
   get totalLinesReceived() {
     return this.totalReceived;
   }
   get size() {
-    return this.lines.length;
+    return this.count;
   }
   clear() {
-    this.lines = [];
+    this.ring = new Array(this.maxLines);
+    this.head = 0;
+    this.count = 0;
+  }
+  /**
+   * Materialise the ring buffer contents in chronological order.
+   */
+  _getOrdered() {
+    if (this.count === 0) return [];
+    const result = new Array(this.count);
+    const start = (this.head - this.count + this.maxLines) % this.maxLines;
+    for (let i = 0; i < this.count; i++) {
+      result[i] = this.ring[(start + i) % this.maxLines];
+    }
+    return result;
   }
 };
 
@@ -208,7 +238,7 @@ function setLogLevel(level) {
 var logger_default = logger;
 
 // src/session.ts
-var Session = class extends import_events.EventEmitter {
+var Session = class _Session extends import_events.EventEmitter {
   id;
   /** The original detected PID (or 0 for daemon-spawned sessions). */
   pid;
@@ -220,6 +250,11 @@ var Session = class extends import_events.EventEmitter {
   owned = false;
   buffer;
   _info;
+  /** Accumulates partial lines between data events. */
+  _partialLine = "";
+  /** Timer for detecting idle state (waiting for input). */
+  _idleTimer = null;
+  static IDLE_TIMEOUT_MS = 3e3;
   constructor(pid, cwd, name, maxBufferLines = 1e4) {
     super();
     this.id = (0, import_uuid.v4)();
@@ -235,7 +270,8 @@ var Session = class extends import_events.EventEmitter {
       lastActivityAt: Date.now(),
       lineCount: 0,
       waitingForInput: false,
-      connectedClients: []
+      connectedClients: [],
+      owned: false
     };
   }
   // ────────────────────────────────────────────
@@ -246,6 +282,9 @@ var Session = class extends import_events.EventEmitter {
   }
   updateStatus(status) {
     this._info.status = status;
+  }
+  setConnectedClients(clients) {
+    this._info.connectedClients = clients;
   }
   /**
    * Spawn a new `claude` process in `cwd` via node-pty.
@@ -259,9 +298,10 @@ var Session = class extends import_events.EventEmitter {
       cols,
       rows,
       cwd: this._info.cwd,
-      env: process.env
+      env: this._sanitizedEnv()
     });
     this.owned = true;
+    this._info.owned = true;
     this._info.status = "active";
     this.pty.onData((data) => {
       this._handleRawData(data, "stdout");
@@ -270,18 +310,34 @@ var Session = class extends import_events.EventEmitter {
       this._info.status = "ended";
       this.pty = null;
       this.owned = false;
+      this._info.owned = false;
       this.emit("exit");
     });
   }
   /**
    * Attach to an external process by reading its stdout fd via /proc.
    * Creates a read-only (no-write) session.
+   *
+   * **Limitation:** Reading `/proc/{pid}/fd/1` only works reliably when the
+   * fd points to a regular file or a pipe whose other end is not being consumed
+   * concurrently. If fd/1 is a TTY, reads may return terminal input rather than
+   * output, or race with the terminal driver. For best results, prefer
+   * daemon-spawned sessions (where we own the PTY master).
    */
   async attach() {
     if (this.pty || this.monitorStream) return;
     const fdPath = `/proc/${this.pid}/fd/1`;
     try {
       fs3.accessSync(fdPath, fs3.constants.R_OK);
+      const realPath = fs3.readlinkSync(fdPath);
+      if (realPath.startsWith("/dev/pts/") || realPath.startsWith("/dev/tty")) {
+        logger_default.warn(
+          `Session ${this.id}: fd/1 points to ${realPath} (TTY) \u2014 skipping output monitor to avoid stealing terminal input`
+        );
+        this._info.status = "active";
+        this._startExitWatcher();
+        return;
+      }
     } catch {
       logger_default.warn(
         `Session ${this.id}: cannot read ${fdPath} \u2014 monitoring as external-only`
@@ -314,6 +370,8 @@ var Session = class extends import_events.EventEmitter {
     }
     this._startExitWatcher();
   }
+  static MAX_INPUT_LENGTH = 64 * 1024;
+  // 64 KB
   /**
    * Send input to the owned PTY.
    * No-ops for external sessions (read-only).
@@ -324,6 +382,12 @@ var Session = class extends import_events.EventEmitter {
         `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? "unknown"})`
       );
       return;
+    }
+    if (data.length > _Session.MAX_INPUT_LENGTH) {
+      logger_default.warn(
+        `Session ${this.id}: input too large (${data.length} bytes), truncating to ${_Session.MAX_INPUT_LENGTH}`
+      );
+      data = data.slice(0, _Session.MAX_INPUT_LENGTH);
     }
     const line = this.buffer.push({
       rawContent: data,
@@ -341,6 +405,10 @@ var Session = class extends import_events.EventEmitter {
     this.pty.resize(cols, rows);
   }
   kill() {
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer);
+      this._idleTimer = null;
+    }
     if (this.pty) {
       try {
         this.pty.kill();
@@ -362,11 +430,11 @@ var Session = class extends import_events.EventEmitter {
   // Private helpers
   // ────────────────────────────────────────────
   _handleRawData(data, source) {
-    const segments = data.split(/\r?\n/);
+    const combined = this._partialLine + data;
+    const segments = combined.split(/\r?\n/);
     const bufferedLines = [];
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i];
-      if (i === segments.length - 1 && seg === "") continue;
+    this._partialLine = segments.pop() ?? "";
+    for (const seg of segments) {
       if (seg === void 0) continue;
       const line = this.buffer.push({
         rawContent: seg,
@@ -379,8 +447,60 @@ var Session = class extends import_events.EventEmitter {
     if (bufferedLines.length > 0) {
       this._info.lastActivityAt = Date.now();
       this._info.status = "active";
+      if (this._info.waitingForInput) {
+        this._info.waitingForInput = false;
+      }
       this.emit("data", bufferedLines);
+      this._resetIdleTimer();
     }
+  }
+  _resetIdleTimer() {
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer);
+    }
+    this._idleTimer = setTimeout(() => {
+      this._idleTimer = null;
+      if (this._info.status === "active" && !this._info.waitingForInput) {
+        this._info.waitingForInput = true;
+        this.emit("data", []);
+      }
+    }, _Session.IDLE_TIMEOUT_MS);
+    this._idleTimer.unref();
+  }
+  /**
+   * Build a sanitized environment for spawned processes.
+   * Only passes through safe, well-known variables.
+   */
+  _sanitizedEnv() {
+    const allowlist = [
+      "HOME",
+      "USER",
+      "SHELL",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+      "PATH",
+      "TERM",
+      "COLORTERM",
+      "EDITOR",
+      "VISUAL",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_RUNTIME_DIR",
+      "SSH_AUTH_SOCK",
+      "GPG_AGENT_INFO",
+      "NODE_ENV",
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_API_KEY"
+    ];
+    const env = {};
+    for (const key of allowlist) {
+      if (process.env[key] !== void 0) {
+        env[key] = process.env[key];
+      }
+    }
+    return env;
   }
   /**
    * Poll /proc/{pid} to detect when the external process exits.
@@ -429,7 +549,8 @@ var SessionManager = class extends import_events2.EventEmitter {
       this.emit("session-updated", session.id, {
         lastActivityAt: session.info.lastActivityAt,
         lineCount: session.info.lineCount,
-        status: session.info.status
+        status: session.info.status,
+        waitingForInput: session.info.waitingForInput
       });
     });
     session.on("exit", () => {
@@ -453,7 +574,8 @@ var SessionManager = class extends import_events2.EventEmitter {
       this.emit("session-updated", session.id, {
         lastActivityAt: session.info.lastActivityAt,
         lineCount: session.info.lineCount,
-        status: session.info.status
+        status: session.info.status,
+        waitingForInput: session.info.waitingForInput
       });
     });
     session.on("exit", () => {
@@ -492,9 +614,9 @@ var SessionManager = class extends import_events2.EventEmitter {
     if (!session) return;
     const info = session.info;
     if (!info.connectedClients.includes(clientId)) {
-      this.emit("session-updated", sessionId, {
-        connectedClients: [...info.connectedClients, clientId]
-      });
+      const updated = [...info.connectedClients, clientId];
+      session.setConnectedClients(updated);
+      this.emit("session-updated", sessionId, { connectedClients: updated });
     }
   }
   removeClientFromSession(sessionId, clientId) {
@@ -502,6 +624,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     if (!session) return;
     const info = session.info;
     const updated = info.connectedClients.filter((c) => c !== clientId);
+    session.setConnectedClients(updated);
     this.emit("session-updated", sessionId, { connectedClients: updated });
   }
   // ────────────────────────────────────────────
@@ -518,7 +641,7 @@ var SessionManager = class extends import_events2.EventEmitter {
 
 // src/process-scanner.ts
 var import_events3 = require("events");
-var fs4 = __toESM(require("fs"));
+var fsp = __toESM(require("fs/promises"));
 var path4 = __toESM(require("path"));
 var ProcessScanner = class extends import_events3.EventEmitter {
   interval = null;
@@ -553,7 +676,7 @@ var ProcessScanner = class extends import_events3.EventEmitter {
     const currentPids = /* @__PURE__ */ new Set();
     let entries;
     try {
-      entries = fs4.readdirSync("/proc");
+      entries = await fsp.readdir("/proc");
     } catch (err) {
       logger_default.error(`Cannot read /proc: ${String(err)}`);
       return;
@@ -561,11 +684,11 @@ var ProcessScanner = class extends import_events3.EventEmitter {
     for (const entry of entries) {
       const pid = parseInt(entry, 10);
       if (isNaN(pid) || pid <= 0) continue;
-      const isClaudeProcess = this.isClaude(pid);
+      const isClaudeProcess = await this.isClaude(pid);
       if (!isClaudeProcess) continue;
       currentPids.add(pid);
       if (!this.knownPids.has(pid)) {
-        const cwd = this.readCwd(pid);
+        const cwd = await this.readCwd(pid);
         if (cwd !== null) {
           logger_default.debug(`ProcessScanner: found claude pid=${pid} cwd=${cwd}`);
           this.knownPids.add(pid);
@@ -588,10 +711,10 @@ var ProcessScanner = class extends import_events3.EventEmitter {
    * Returns true if the process with `pid` is a `claude` process.
    * Reads /proc/{pid}/cmdline (null-byte separated argv).
    */
-  isClaude(pid) {
+  async isClaude(pid) {
     const cmdlinePath = path4.join("/proc", String(pid), "cmdline");
     try {
-      const raw = fs4.readFileSync(cmdlinePath, "utf8");
+      const raw = await fsp.readFile(cmdlinePath, "utf8");
       const args = raw.split("\0").filter(Boolean);
       return args.some((arg) => {
         return arg === "claude" || /[/\\]claude(?:\.[jt]s)?$/.test(arg) || arg.endsWith("/claude");
@@ -604,10 +727,10 @@ var ProcessScanner = class extends import_events3.EventEmitter {
    * Read the CWD of a process via /proc/{pid}/cwd symlink.
    * Returns null if not readable.
    */
-  readCwd(pid) {
+  async readCwd(pid) {
     const cwdLink = path4.join("/proc", String(pid), "cwd");
     try {
-      return fs4.readlinkSync(cwdLink);
+      return await fsp.readlink(cwdLink);
     } catch {
       return null;
     }
@@ -619,16 +742,22 @@ var ProcessScanner = class extends import_events3.EventEmitter {
 };
 
 // src/ws-server.ts
+var crypto2 = __toESM(require("crypto"));
 var http = __toESM(require("http"));
 var import_ws = require("ws");
 var import_uuid2 = require("uuid");
 var INPUT_LOCK_TTL_MS = 2e3;
-var WsServer = class {
-  constructor(sessionManager, config, bindAddress) {
+var WsServer = class _WsServer {
+  constructor(sessionManager, config, bindAddress, pushService) {
     this.sessionManager = sessionManager;
     this.config = config;
     this.bindAddress = bindAddress;
+    this.pushService = pushService;
   }
+  sessionManager;
+  config;
+  bindAddress;
+  pushService;
   httpServer = null;
   wss = null;
   clients = /* @__PURE__ */ new Map();
@@ -638,7 +767,11 @@ var WsServer = class {
   // ────────────────────────────────────────────
   async start() {
     this.httpServer = http.createServer();
-    this.wss = new import_ws.WebSocketServer({ server: this.httpServer });
+    this.wss = new import_ws.WebSocketServer({
+      server: this.httpServer,
+      maxPayload: 1024 * 1024
+      // 1 MB max message size
+    });
     this.wss.on("connection", (ws) => {
       this._handleConnection(ws);
     });
@@ -663,11 +796,6 @@ var WsServer = class {
         this.broadcastSessionUpdated(sessionId, changes);
       }
     );
-    this.sessionManager.getAllSessions().forEach((session) => {
-      session.on("data", (lines) => {
-        this.broadcastOutput(session.id, lines);
-      });
-    });
   }
   stop() {
     this.wss?.close();
@@ -677,23 +805,41 @@ var WsServer = class {
   // ────────────────────────────────────────────
   // Broadcast helpers
   // ────────────────────────────────────────────
+  /** Track sessions that already have a data listener wired to avoid duplicates. */
+  wiredSessions = /* @__PURE__ */ new Set();
   broadcastSessionAdded(session) {
     const msg = { type: "SESSION_ADDED", session };
     this._broadcastAll(msg);
-    const sessionObj = this.sessionManager.getSession(session.id);
-    if (sessionObj) {
-      sessionObj.on("data", (lines) => {
-        this.broadcastOutput(session.id, lines);
-      });
+    if (!this.wiredSessions.has(session.id)) {
+      const sessionObj = this.sessionManager.getSession(session.id);
+      if (sessionObj) {
+        this.wiredSessions.add(session.id);
+        sessionObj.on("data", (lines) => {
+          this.broadcastOutput(session.id, lines);
+        });
+      }
     }
   }
   broadcastSessionRemoved(sessionId) {
     const msg = { type: "SESSION_REMOVED", sessionId };
     this._broadcastAll(msg);
+    this.wiredSessions.delete(sessionId);
+    this.inputLocks.delete(sessionId);
   }
   broadcastSessionUpdated(sessionId, changes) {
     const msg = { type: "SESSION_UPDATED", sessionId, changes };
     this._broadcastAll(msg);
+    if (changes.waitingForInput === true && this.pushService?.isEnabled) {
+      const session = this.sessionManager.getSession(sessionId);
+      const name = session?.info.name ?? "Claude";
+      this.pushService.sendToAll(
+        `${name} needs input`,
+        "Claude has finished its task and is waiting for your response.",
+        { sessionId }
+      ).catch((err) => {
+        logger_default.warn(`FCM push error: ${String(err)}`);
+      });
+    }
   }
   broadcastOutput(sessionId, lines) {
     const msg = { type: "OUTPUT", sessionId, lines };
@@ -743,6 +889,7 @@ var WsServer = class {
       }
     }, 1e4);
     authTimeout.unref();
+    client.authTimeout = authTimeout;
   }
   _handleMessage(client, msg) {
     if (typeof msg !== "object" || msg === null || !("type" in msg)) {
@@ -750,6 +897,10 @@ var WsServer = class {
       return;
     }
     const typed = msg;
+    if (!this._validateMessage(typed)) {
+      this._sendError(client.ws, "INVALID_MESSAGE", "Invalid message fields");
+      return;
+    }
     if (!client.isAuthenticated) {
       if (typed.type !== "AUTH") {
         this._sendError(client.ws, "NOT_AUTHENTICATED", "Send AUTH first");
@@ -780,15 +931,48 @@ var WsServer = class {
       case "PING":
         this._handlePing(client);
         break;
+      case "REGISTER_PUSH_TOKEN":
+        this._handleRegisterPushToken(client, typed);
+        break;
       default:
         this._sendError(client.ws, "UNKNOWN_TYPE", "Unknown message type");
+    }
+  }
+  // ────────────────────────────────────────────
+  // Message validation
+  // ────────────────────────────────────────────
+  static MAX_INPUT_LENGTH = 64 * 1024;
+  // 64 KB max input
+  _validateMessage(msg) {
+    const m = msg;
+    switch (m.type) {
+      case "AUTH":
+        return typeof m.secret === "string" && typeof m.clientId === "string";
+      case "LIST_SESSIONS":
+      case "PING":
+        return true;
+      case "SUBSCRIBE":
+        return typeof m.sessionId === "string" && (m.fromLine === void 0 || typeof m.fromLine === "number" && Number.isInteger(m.fromLine) && m.fromLine >= 0);
+      case "UNSUBSCRIBE":
+        return typeof m.sessionId === "string";
+      case "INPUT":
+        return typeof m.sessionId === "string" && typeof m.data === "string" && m.data.length <= _WsServer.MAX_INPUT_LENGTH;
+      case "RESIZE":
+        return typeof m.sessionId === "string" && typeof m.cols === "number" && Number.isInteger(m.cols) && m.cols > 0 && m.cols <= 1e3 && typeof m.rows === "number" && Number.isInteger(m.rows) && m.rows > 0 && m.rows <= 500;
+      case "REGISTER_PUSH_TOKEN":
+        return typeof m.token === "string" && m.token.length > 0 && (m.platform === "android" || m.platform === "ios");
+      default:
+        return true;
     }
   }
   // ────────────────────────────────────────────
   // Message handlers
   // ────────────────────────────────────────────
   _handleAuth(client, msg) {
-    if (msg.secret !== this.config.authSecret) {
+    const secretBuf = Buffer.from(String(msg.secret));
+    const expectedBuf = Buffer.from(this.config.authSecret);
+    const isValid = secretBuf.length === expectedBuf.length && crypto2.timingSafeEqual(secretBuf, expectedBuf);
+    if (!isValid) {
       logger_default.warn(`WS client ${client.id}: auth failed`);
       const fail = {
         type: "AUTH_FAIL",
@@ -800,6 +984,10 @@ var WsServer = class {
     }
     client.isAuthenticated = true;
     client.name = msg.clientName || "unknown";
+    if (client.authTimeout) {
+      clearTimeout(client.authTimeout);
+      client.authTimeout = void 0;
+    }
     const ok = { type: "AUTH_OK", clientId: client.id };
     this._send(client.ws, ok);
     logger_default.info(`WS client authenticated: ${client.id} (${client.name})`);
@@ -872,6 +1060,11 @@ var WsServer = class {
     const pong = { type: "PONG", timestamp: Date.now() };
     this._send(client.ws, pong);
   }
+  _handleRegisterPushToken(client, msg) {
+    if (this.pushService) {
+      this.pushService.registerToken(client.id, msg.token, msg.platform);
+    }
+  }
   // ────────────────────────────────────────────
   // Sending helpers
   // ────────────────────────────────────────────
@@ -913,6 +1106,186 @@ var WsServer = class {
   }
 };
 
+// src/push.ts
+var fs4 = __toESM(require("fs"));
+var https = __toESM(require("https"));
+var crypto3 = __toESM(require("crypto"));
+function base64url(buf) {
+  return buf.toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function createJwt(sa) {
+  const now = Math.floor(Date.now() / 1e3);
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    iss: sa.client_email,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: sa.token_uri,
+    iat: now,
+    exp: now + 3600
+  };
+  const segments = [
+    base64url(Buffer.from(JSON.stringify(header))),
+    base64url(Buffer.from(JSON.stringify(payload)))
+  ];
+  const sign = crypto3.createSign("RSA-SHA256");
+  sign.update(segments.join("."));
+  const signature = base64url(sign.sign(sa.private_key));
+  return `${segments.join(".")}.${signature}`;
+}
+async function getAccessToken(sa) {
+  const jwt = createJwt(sa);
+  return new Promise((resolve2, reject) => {
+    const body = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
+    const url = new URL(sa.token_uri);
+    const req = https.request(
+      {
+        hostname: url.hostname,
+        path: url.pathname,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": Buffer.byteLength(body)
+        }
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => data += chunk.toString());
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.access_token) {
+              resolve2(parsed.access_token);
+            } else {
+              reject(new Error(`OAuth token response missing access_token: ${data}`));
+            }
+          } catch (err) {
+            reject(new Error(`Failed to parse OAuth response: ${data}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+var PushService = class {
+  serviceAccount = null;
+  accessToken = null;
+  tokenExpiresAt = 0;
+  pushTokens = /* @__PURE__ */ new Map();
+  // clientId → PushToken
+  constructor(serviceAccountPath) {
+    const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
+    try {
+      if (fs4.existsSync(saPath)) {
+        const raw = fs4.readFileSync(saPath, "utf-8");
+        this.serviceAccount = JSON.parse(raw);
+        logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
+      } else {
+        logger_default.info("FCM service account not found \u2014 push notifications disabled");
+      }
+    } catch (err) {
+      logger_default.warn(`Failed to load FCM service account: ${String(err)}`);
+    }
+  }
+  get isEnabled() {
+    return this.serviceAccount !== null;
+  }
+  registerToken(clientId, token, platform) {
+    this.pushTokens.set(clientId, { token, platform, clientId });
+    logger_default.info(`Push token registered for client ${clientId} (${platform})`);
+  }
+  unregisterClient(clientId) {
+    this.pushTokens.delete(clientId);
+  }
+  async sendToAll(title, body, data) {
+    if (!this.serviceAccount || this.pushTokens.size === 0) return;
+    const token = await this.getToken();
+    if (!token) return;
+    const promises = [];
+    for (const pushToken of this.pushTokens.values()) {
+      promises.push(this.sendOne(token, pushToken, title, body, data));
+    }
+    await Promise.allSettled(promises);
+  }
+  async getToken() {
+    if (!this.serviceAccount) return null;
+    if (this.accessToken && Date.now() < this.tokenExpiresAt - 3e5) {
+      return this.accessToken;
+    }
+    try {
+      this.accessToken = await getAccessToken(this.serviceAccount);
+      this.tokenExpiresAt = Date.now() + 36e5;
+      return this.accessToken;
+    } catch (err) {
+      logger_default.error(`Failed to get FCM access token: ${String(err)}`);
+      return null;
+    }
+  }
+  async sendOne(accessToken, pushToken, title, body, data) {
+    const projectId = this.serviceAccount.project_id;
+    const message = {
+      message: {
+        token: pushToken.token,
+        notification: { title, body },
+        android: {
+          priority: "high",
+          notification: {
+            channel_id: "walccy-sessions",
+            sound: "default"
+          }
+        },
+        ...data ? { data } : {}
+      }
+    };
+    return new Promise((resolve2, reject) => {
+      const payload = JSON.stringify(message);
+      const req = https.request(
+        {
+          hostname: "fcm.googleapis.com",
+          path: `/v1/projects/${projectId}/messages:send`,
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload)
+          }
+        },
+        (res) => {
+          let responseData = "";
+          res.on("data", (chunk) => responseData += chunk.toString());
+          res.on("end", () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              logger_default.debug(`FCM push sent to ${pushToken.clientId}`);
+              resolve2();
+            } else {
+              logger_default.warn(
+                `FCM push failed (${res.statusCode}): ${responseData}`
+              );
+              if (res.statusCode === 404 || res.statusCode === 400) {
+                const parsed = JSON.parse(responseData);
+                const errorCode = parsed?.error?.details?.[0]?.errorCode;
+                if (errorCode === "UNREGISTERED") {
+                  logger_default.info(`Removing unregistered push token for ${pushToken.clientId}`);
+                  this.pushTokens.delete(pushToken.clientId);
+                }
+              }
+              resolve2();
+            }
+          });
+        }
+      );
+      req.on("error", (err) => {
+        logger_default.warn(`FCM request error: ${err.message}`);
+        resolve2();
+      });
+      req.write(payload);
+      req.end();
+    });
+  }
+};
+
 // src/tailscale.ts
 var import_child_process = require("child_process");
 var import_util = require("util");
@@ -939,17 +1312,20 @@ async function getTailscaleIP() {
     return null;
   }
 }
-async function waitForTailscale(intervalMs = 1e4) {
-  while (true) {
+async function waitForTailscale(intervalMs = 1e4, maxRetries = 30) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     const ip = await getTailscaleIP();
     if (ip !== null) {
       return ip;
     }
     logger_default.warn(
-      `Tailscale not available yet \u2014 retrying in ${intervalMs / 1e3}s`
+      `Tailscale not available yet \u2014 retrying in ${intervalMs / 1e3}s (attempt ${attempt + 1}/${maxRetries})`
     );
     await delay(intervalMs);
   }
+  throw new Error(
+    `Tailscale not available after ${maxRetries} attempts (${maxRetries * intervalMs / 1e3}s). Is tailscaled running?`
+  );
 }
 function delay(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
@@ -975,7 +1351,8 @@ var Daemon = class {
     }
     this.sessionManager = new SessionManager(this.config.maxBufferLines);
     this.processScanner = new ProcessScanner();
-    this.wsServer = new WsServer(this.sessionManager, this.config, bindAddress);
+    const pushService = new PushService();
+    this.wsServer = new WsServer(this.sessionManager, this.config, bindAddress, pushService);
     this.processScanner.on("process-found", async (pid, cwd) => {
       if (this.sessionManager.getSessionByPid(pid)) return;
       const session = this.sessionManager.createSession(pid, cwd);
