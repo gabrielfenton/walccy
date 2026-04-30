@@ -3,7 +3,7 @@
 // Renders a single buffered line with ANSI color support.
 // ──────────────────────────────────────────────
 
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { parseAnsi } from '../../services/ansi-parser';
 import { Colors } from '../../constants/colors';
@@ -36,7 +36,10 @@ function getInputLineColor(line: BufferedLine): string | undefined {
 // ──────────────────────────────────────────────
 
 function TerminalLineBase({ line, fontSize = 13, lineHeight = 1.5 }: TerminalLineProps): React.ReactElement {
-  const spans: TextSpan[] = parseAnsi(line.rawContent);
+  // Memoize ANSI parsing: line content is immutable once buffered, so we key
+  // on `line.index` (monotonic, stable). On FlashList recycling the index
+  // changes, invalidating the cache; for the same line, we skip re-parsing.
+  const spans: TextSpan[] = useMemo(() => parseAnsi(line.rawContent), [line.index]);
   const inputColor = getInputLineColor(line);
 
   return (

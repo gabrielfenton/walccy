@@ -55,13 +55,27 @@ export const useOutputStore = create<OutputStore>((set) => ({
   appendLines: (sessionId, lines) =>
     set((state) => {
       const existing = state.buffers[sessionId] ?? emptyBuffer();
-      const combined = [...existing.lines, ...lines];
+      // If a single chunk exceeds capacity, slice it down first to avoid
+      // a giant push() followed by a long shift loop.
+      const incoming =
+        lines.length > MAX_LINES_PER_BUFFER
+          ? lines.slice(lines.length - MAX_LINES_PER_BUFFER)
+          : lines;
+      // Mutate in place: push new lines, then trim from the front.
+      // This avoids the [...existing.lines, ...lines] double-spread that
+      // re-allocated the entire scrollback on every OUTPUT message.
+      const buf = existing.lines;
+      buf.push(...incoming);
+      const overflow = buf.length - MAX_LINES_PER_BUFFER;
+      if (overflow > 0) buf.splice(0, overflow);
+      // Single allocation: a new outer array reference so FlashList sees a
+      // changed prop and re-renders, but contents are shared with `buf`.
       return {
         buffers: {
           ...state.buffers,
           [sessionId]: {
             ...existing,
-            lines: clampLines(combined),
+            lines: [...buf],
             totalLines: existing.totalLines + lines.length,
           },
         },
