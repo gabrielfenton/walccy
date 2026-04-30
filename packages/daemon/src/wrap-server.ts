@@ -138,10 +138,10 @@ export class WrapServer {
     });
 
     socket.on('close', () => {
-      if (session) {
+      if (session && this.sessionManager.getSession(session.id)) {
         this.sessionManager.removeSession(session.id);
-        session = null;
       }
+      session = null;
     });
 
     socket.on('error', (err) => {

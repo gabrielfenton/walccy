@@ -224,7 +224,21 @@ export class Session extends EventEmitter {
       data = data.slice(0, Session.MAX_INPUT_LENGTH);
     }
 
-    // Record input in buffer
+    this._info.lastActivityAt = Date.now();
+
+    if (this.wrapperSocket) {
+      // PTY echo will land in our buffer as stdout; skip recording the input line.
+      this.wrapperSocket.write(
+        JSON.stringify({
+          type: 'INPUT',
+          data: Buffer.from(data, 'utf8').toString('base64'),
+        }) + '\n'
+      );
+      return;
+    }
+
+    // Spawn mode: record input line so the user sees what they typed even
+    // when the TUI doesn't echo it back.
     const line = this.buffer.push({
       rawContent: data,
       content: data,
@@ -232,20 +246,8 @@ export class Session extends EventEmitter {
       source: 'input',
       inputClientId: clientId,
     });
-
-    this._info.lastActivityAt = Date.now();
     this.emit('data', [line]);
-
-    if (this.wrapperSocket) {
-      this.wrapperSocket.write(
-        JSON.stringify({
-          type: 'INPUT',
-          data: Buffer.from(data, 'utf8').toString('base64'),
-        }) + '\n'
-      );
-    } else if (this.pty) {
-      this.pty.write(data);
-    }
+    this.pty!.write(data);
   }
 
   resize(cols: number, rows: number): void {
@@ -280,12 +282,13 @@ export class Session extends EventEmitter {
     }
 
     if (this.wrapperSocket) {
+      const sock = this.wrapperSocket;
+      this.wrapperSocket = null;
       try {
-        this.wrapperSocket.destroy();
+        sock.destroy();
       } catch {
         // already closed
       }
-      this.wrapperSocket = null;
     }
 
     this._info.status = 'ended';
