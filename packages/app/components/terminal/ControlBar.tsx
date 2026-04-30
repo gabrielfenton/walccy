@@ -5,6 +5,7 @@
 
 import React, { useRef, useState, useCallback } from 'react';
 import {
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -103,10 +104,19 @@ export function ControlBar({
     }
   }, []);
 
+  // Order: high-frequency Claude Code keys first, then arrows, then sheets.
+  // ⇧Tab cycles plan/auto/edit modes (Ink reads `\x1b[Z` as shift+tab).
+  // `/` opens slash-command palette inside Claude's input.
+  // ↵ and ⌫ are for users on hardware keyboards that lack them, and as a
+  // safety net for soft-keyboard quirks.
   const keys: KeyDef[] = [
     { kind: 'ctrl' },
     { kind: 'key', label: 'Esc', data: '\x1b' },
     { kind: 'key', label: 'Tab', data: '\t' },
+    { kind: 'key', label: '⇧Tab', data: '\x1b[Z' },
+    { kind: 'key', label: '/', data: '/' },
+    { kind: 'key', label: '↵', data: '\r' },
+    { kind: 'key', label: '⌫', data: '\x7f', repeatable: true },
     { kind: 'key', label: '↑', data: '\x1b[A', repeatable: true },
     { kind: 'key', label: '↓', data: '\x1b[B', repeatable: true },
     { kind: 'key', label: '←', data: '\x1b[D', repeatable: true },
@@ -116,7 +126,13 @@ export function ControlBar({
   ];
 
   return (
-    <View style={styles.bar}>
+    <ScrollView
+      horizontal
+      style={styles.bar}
+      contentContainerStyle={styles.barContent}
+      showsHorizontalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
       {keys.map((key, index) => {
         const isFirst = index === 0;
         const isLast = index === keys.length - 1;
@@ -187,7 +203,7 @@ export function ControlBar({
           </TouchableOpacity>
         );
       })}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -198,13 +214,18 @@ export function ControlBar({
 const styles = StyleSheet.create({
   bar: {
     height: 44,
-    flexDirection: 'row',
     backgroundColor: Colors.surface,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
+    flexGrow: 0,
+  },
+  barContent: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
   },
   button: {
-    flex: 1,
+    minWidth: 56,
+    paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
