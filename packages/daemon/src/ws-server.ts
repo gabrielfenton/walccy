@@ -206,6 +206,7 @@ export class WsServer {
       for (const sessionId of client.subscribedSessions) {
         this.sessionManager.removeClientFromSession(sessionId, clientId);
       }
+      this.pushService?.unregisterClient(clientId);
       this.clients.delete(clientId);
     });
 
