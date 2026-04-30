@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import { getWrapSocketPath } from './wrap-server.js';
+import { WRAPPED_ENV_VAR } from './shell-installer.js';
 
 /**
  * Resolve `cmd` against PATH (or as a literal path if it contains `/`).
@@ -101,7 +102,10 @@ export async function runWrapper(argv: string[]): Promise<never> {
       cols,
       rows,
       cwd: process.cwd(),
-      env: process.env as Record<string, string>,
+      env: {
+        ...(process.env as Record<string, string>),
+        [WRAPPED_ENV_VAR]: '1',
+      },
     });
   } catch (err) {
     restoreTty();
@@ -161,6 +165,7 @@ export async function runWrapper(argv: string[]): Promise<never> {
   });
 
   socket.on('error', (err) => {
+    socketReady = false;
     process.stderr.write(`\n[walccy] daemon socket error: ${err.message} (continuing without mirror)\n`);
   });
   socket.on('close', () => {
