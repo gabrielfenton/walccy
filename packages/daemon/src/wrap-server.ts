@@ -51,13 +51,23 @@ export class WrapServer {
   async start(): Promise<void> {
     const dir = path.dirname(this.socketPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Defensive: tighten an existing-but-loose dir (logger may have created it
+    // first under default umask, leaving 0775 readable by group/other).
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch {
+      // best effort
+    }
 
-    // Remove a stale socket file from a previous crashed run.
-    if (fs.existsSync(this.socketPath)) {
-      try {
-        fs.unlinkSync(this.socketPath);
-      } catch {
-        // best effort
+    // Remove a stale socket file from a previous crashed run. Use try/catch
+    // (swallowing only ENOENT) instead of existsSync→unlinkSync so there is
+    // no TOCTOU window between the check and the unlink.
+    try {
+      fs.unlinkSync(this.socketPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        // best effort — log but don't fail; listen() will surface real problems.
+        logger.warn(`wrap: failed to remove stale socket: ${(err as Error).message}`);
       }
     }
 
