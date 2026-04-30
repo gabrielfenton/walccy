@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
+import pkg from '../package.json';
 import { Daemon } from './daemon.js';
 import { loadConfig, getConfigPath } from './config.js';
 import { getTailscaleIP } from './tailscale.js';
@@ -27,7 +29,7 @@ const program = new Command();
 
 program
   .name('walccy')
-  .version('1.0.0')
+  .version(pkg.version)
   .description('Walccy — Claude session daemon');
 
 // ── start ────────────────────────────────────
@@ -101,7 +103,12 @@ program
     console.log(`Service status : ${status}`);
     console.log(`Config file    : ${getConfigPath()}`);
     console.log(`Port           : ${config.port}`);
-    console.log(`Auth secret    : ${config.authSecret.slice(0, 8)}… (truncated)`);
+    if (config.authSecret) {
+      const fp = crypto.createHash('sha256').update(config.authSecret).digest('hex').slice(0, 8);
+      console.log(`Auth secret    : set (fp: ${fp})`);
+    } else {
+      console.log(`Auth secret    : unset`);
+    }
     console.log(`Tailscale IP   : ${tailscaleIP ?? '(not available)'}`);
     console.log(`Dev mode       : ${process.env['WALCCY_DEV_MODE'] === '1' ? 'yes' : 'no'}`);
   });
@@ -139,11 +146,9 @@ program
       );
     });
 
-    let authed = false;
     ws.on('message', (raw: Buffer) => {
       const msg = JSON.parse(raw.toString()) as { type: string; sessions?: unknown[] };
       if (msg.type === 'AUTH_OK') {
-        authed = true;
         ws.send(JSON.stringify({ type: 'LIST_SESSIONS' }));
       } else if (msg.type === 'SESSIONS') {
         clearTimeout(timeout);
@@ -155,7 +160,6 @@ program
         ws.close();
         process.exit(1);
       }
-      void authed; // suppress unused warning
     });
 
     ws.on('error', (err: Error) => {
@@ -318,6 +322,39 @@ program
 // Mirror an existing terminal session to the daemon.
 
 program
+  .command('install-shell')
+  .description(
+    'Install a shell function in your bashrc/zshrc so that running `claude` automatically wraps it via walccy.'
+  )
+  .action(async () => {
+    const { installShellIntegration } = await import('./shell-installer.js');
+    const result = installShellIntegration();
+    for (const p of result.modified) {
+      console.log(`  modified: ${p}`);
+    }
+    for (const s of result.skipped) {
+      console.log(`  skipped:  ${s}`);
+    }
+    if (result.modified.length > 0) {
+      console.log('\nOpen a new shell (or `source` the file above) to activate.');
+    }
+  });
+
+program
+  .command('uninstall-shell')
+  .description('Remove the walccy shell integration from your bashrc/zshrc.')
+  .action(async () => {
+    const { uninstallShellIntegration } = await import('./shell-installer.js');
+    const result = uninstallShellIntegration();
+    for (const p of result.modified) {
+      console.log(`  cleaned:  ${p}`);
+    }
+    for (const s of result.skipped) {
+      console.log(`  skipped:  ${s}`);
+    }
+  });
+
+program
   .command('wrap')
   .description(
     'Run a command (default: claude) inside a PTY whose output is mirrored to the running daemon, so the mobile app can see it and send input back.'
@@ -338,18 +375,7 @@ program
 // subcommands.  This lets users type `walccy claude` instead of
 // `walccy wrap claude`.
 const KNOWN_SUBCOMMANDS = new Set<string>([
-  'start',
-  'stop',
-  'status',
-  'sessions',
-  'pair',
-  'config',
-  'init',
-  'install-service',
-  'uninstall',
-  'register-session',
-  'unregister-session',
-  'wrap',
+  ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
   'help',
 ]);
 const firstArg = process.argv[2];
