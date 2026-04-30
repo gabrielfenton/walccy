@@ -7,9 +7,39 @@
 // input arrives back over the same socket and is fed into the PTY.
 // ──────────────────────────────────────────────
 
+import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import { getWrapSocketPath } from './wrap-server.js';
+
+/**
+ * Resolve `cmd` against PATH (or as a literal path if it contains `/`).
+ * pty.spawn does NOT throw for a missing binary — its helper fails async
+ * with exit=1, which gives a confusing "execvp(3) failed" line and no
+ * actionable message — so we probe up front.
+ */
+function findInPath(cmd: string): string | null {
+  if (cmd.includes('/')) {
+    try {
+      fs.accessSync(cmd, fs.constants.X_OK);
+      return cmd;
+    } catch {
+      return null;
+    }
+  }
+  const PATH = process.env['PATH'] ?? '';
+  for (const dir of PATH.split(':')) {
+    if (!dir) continue;
+    const full = path.join(dir, cmd);
+    try {
+      fs.accessSync(full, fs.constants.X_OK);
+      return full;
+    } catch {
+      // keep searching
+    }
+  }
+  return null;
+}
 
 interface DaemonToWrapper {
   type: 'REGISTERED' | 'INPUT' | 'RESIZE';
@@ -50,6 +80,11 @@ export async function runWrapper(argv: string[]): Promise<never> {
     restoreTty();
     process.exit(143);
   });
+
+  if (!findInPath(cmd)) {
+    process.stderr.write(`walccy: command not found: ${cmd}\n`);
+    process.exit(127);
+  }
 
   // Lazy require so importing this module doesn't drag node-pty into the
   // daemon's hot path unless the wrap subcommand is actually used.

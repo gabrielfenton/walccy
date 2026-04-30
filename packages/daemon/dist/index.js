@@ -179,10 +179,10 @@ var init_wrap_server = __esm({
           }
         });
         socket.on("close", () => {
-          if (session) {
+          if (session && this.sessionManager.getSession(session.id)) {
             this.sessionManager.removeSession(session.id);
-            session = null;
           }
+          session = null;
         });
         socket.on("error", (err) => {
           logger_default.warn(`wrap: socket error: ${err.message}`);
@@ -197,20 +197,83 @@ var wrap_cli_exports = {};
 __export(wrap_cli_exports, {
   runWrapper: () => runWrapper
 });
+function findInPath(cmd) {
+  if (cmd.includes("/")) {
+    try {
+      fs8.accessSync(cmd, fs8.constants.X_OK);
+      return cmd;
+    } catch {
+      return null;
+    }
+  }
+  const PATH = process.env["PATH"] ?? "";
+  for (const dir of PATH.split(":")) {
+    if (!dir) continue;
+    const full = path8.join(dir, cmd);
+    try {
+      fs8.accessSync(full, fs8.constants.X_OK);
+      return full;
+    } catch {
+    }
+  }
+  return null;
+}
 async function runWrapper(argv) {
   if (argv.length === 0) argv = ["claude"];
   const cmd = argv[0];
   const args = argv.slice(1);
+  const restoreTty = () => {
+    if (process.stdin.isTTY) {
+      try {
+        process.stdin.setRawMode(false);
+      } catch {
+      }
+    }
+  };
+  process.on("exit", restoreTty);
+  process.on("uncaughtException", (err) => {
+    restoreTty();
+    console.error(err);
+    process.exit(1);
+  });
+  process.on("SIGINT", () => {
+    restoreTty();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    restoreTty();
+    process.exit(143);
+  });
+  if (!findInPath(cmd)) {
+    process.stderr.write(`walccy: command not found: ${cmd}
+`);
+    process.exit(127);
+  }
   const pty = require("node-pty");
   const cols = process.stdout.columns ?? 80;
   const rows = process.stdout.rows ?? 24;
-  const term = pty.spawn(cmd, args, {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd: process.cwd(),
-    env: process.env
-  });
+  let term;
+  try {
+    term = pty.spawn(cmd, args, {
+      name: "xterm-256color",
+      cols,
+      rows,
+      cwd: process.cwd(),
+      env: process.env
+    });
+  } catch (err) {
+    restoreTty();
+    const e = err;
+    if (e && e.code === "ENOENT") {
+      process.stderr.write(`walccy: command not found: ${cmd}
+`);
+    } else {
+      const msg = e && e.message || String(err);
+      process.stderr.write(`walccy: failed to spawn ${cmd}: ${msg}
+`);
+    }
+    process.exit(127);
+  }
   const socket = net2.createConnection(getWrapSocketPath());
   socket.once("connect", () => {
     socket.write(
@@ -259,15 +322,31 @@ async function runWrapper(argv) {
   socket.on("close", () => {
     socketReady = false;
   });
+  const MAX_PENDING_BYTES = 1 * 1024 * 1024;
+  let pendingBytes = 0;
+  let warnedDropping = false;
+  socket.on("drain", () => {
+    pendingBytes = 0;
+    warnedDropping = false;
+  });
   term.onData((data) => {
     process.stdout.write(data);
     if (socketReady) {
-      socket.write(
-        JSON.stringify({
-          type: "OUTPUT",
-          data: Buffer.from(data, "utf8").toString("base64")
-        }) + "\n"
-      );
+      if (pendingBytes > MAX_PENDING_BYTES) {
+        if (!warnedDropping) {
+          warnedDropping = true;
+          process.stderr.write("\n[walccy] mirror dropping frames (daemon stalled)\n");
+        }
+        return;
+      }
+      const payload = JSON.stringify({
+        type: "OUTPUT",
+        data: Buffer.from(data, "utf8").toString("base64")
+      }) + "\n";
+      const flushed = socket.write(payload);
+      if (!flushed) {
+        pendingBytes += Buffer.byteLength(payload);
+      }
     }
   });
   if (process.stdin.isTTY) {
@@ -305,10 +384,11 @@ async function runWrapper(argv) {
   });
   return void 0;
 }
-var net2, path8;
+var fs8, net2, path8;
 var init_wrap_cli = __esm({
   "src/wrap-cli.ts"() {
     "use strict";
+    fs8 = __toESM(require("fs"));
     net2 = __toESM(require("net"));
     path8 = __toESM(require("path"));
     init_wrap_server();
@@ -654,15 +734,7 @@ var Session = class _Session extends import_events.EventEmitter {
       );
       data = data.slice(0, _Session.MAX_INPUT_LENGTH);
     }
-    const line = this.buffer.push({
-      rawContent: data,
-      content: data,
-      timestamp: Date.now(),
-      source: "input",
-      inputClientId: clientId
-    });
     this._info.lastActivityAt = Date.now();
-    this.emit("data", [line]);
     if (this.wrapperSocket) {
       this.wrapperSocket.write(
         JSON.stringify({
@@ -670,9 +742,17 @@ var Session = class _Session extends import_events.EventEmitter {
           data: Buffer.from(data, "utf8").toString("base64")
         }) + "\n"
       );
-    } else if (this.pty) {
-      this.pty.write(data);
+      return;
     }
+    const line = this.buffer.push({
+      rawContent: data,
+      content: data,
+      timestamp: Date.now(),
+      source: "input",
+      inputClientId: clientId
+    });
+    this.emit("data", [line]);
+    this.pty.write(data);
   }
   resize(cols, rows) {
     if (this.wrapperSocket) {
@@ -701,11 +781,12 @@ var Session = class _Session extends import_events.EventEmitter {
       this.monitorStream = null;
     }
     if (this.wrapperSocket) {
+      const sock = this.wrapperSocket;
+      this.wrapperSocket = null;
       try {
-        this.wrapperSocket.destroy();
+        sock.destroy();
       } catch {
       }
-      this.wrapperSocket = null;
     }
     this._info.status = "ended";
   }
@@ -1393,6 +1474,7 @@ var WsServer = class _WsServer {
       for (const sessionId of client.subscribedSessions) {
         this.sessionManager.removeClientFromSession(sessionId, clientId);
       }
+      this.pushService?.unregisterClient(clientId);
       this.clients.delete(clientId);
     });
     ws.on("error", (err) => {
@@ -2226,14 +2308,14 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
         await uninstallSystemdService();
         const configPath = getConfigPath();
         const configDir = path9.dirname(configPath);
-        const fs8 = await import("fs");
-        if (fs8.existsSync(configDir)) {
-          fs8.rmSync(configDir, { recursive: true, force: true });
+        const fs9 = await import("fs");
+        if (fs9.existsSync(configDir)) {
+          fs9.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
         const logDir2 = path9.join(os6.homedir(), ".walccy");
-        if (fs8.existsSync(logDir2)) {
-          fs8.rmSync(logDir2, { recursive: true, force: true });
+        if (fs9.existsSync(logDir2)) {
+          fs9.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");
