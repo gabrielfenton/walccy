@@ -48,15 +48,7 @@ export class SessionManager extends EventEmitter {
     this.sessions.set(session.id, session);
     this.pidToSessionId.set(pid, session.id);
 
-    // Forward session data events as session-updated broadcasts
-    session.on('data', () => {
-      this.emit('session-updated', session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput,
-      });
-    });
+    this.wireSessionEvents(session);
 
     session.on('exit', () => {
       logger.info(`Session ${session.id} (pid=${pid}) exited`);
@@ -81,14 +73,7 @@ export class SessionManager extends EventEmitter {
 
     this.sessions.set(session.id, session);
 
-    session.on('data', () => {
-      this.emit('session-updated', session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput,
-      });
-    });
+    this.wireSessionEvents(session);
 
     session.on('exit', () => {
       logger.info(`Spawned session ${session.id} exited`);
@@ -120,14 +105,7 @@ export class SessionManager extends EventEmitter {
     this.sessions.set(session.id, session);
     if (pid > 0) this.pidToSessionId.set(pid, session.id);
 
-    session.on('data', () => {
-      this.emit('session-updated', session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput,
-      });
-    });
+    this.wireSessionEvents(session);
 
     session.on('exit', () => {
       logger.info(`Wrapped session ${session.id} (pid=${pid}) exited`);
@@ -199,6 +177,18 @@ export class SessionManager extends EventEmitter {
 
   private deriveName(cwd: string): string {
     return path.basename(cwd) || cwd;
+  }
+
+  /** Forward session 'data' events as session-updated metadata broadcasts. */
+  private wireSessionEvents(session: Session): void {
+    session.on('data', () => {
+      this.emit('session-updated', session.id, {
+        lastActivityAt: session.info.lastActivityAt,
+        lineCount: session.info.lineCount,
+        status: session.info.status,
+        waitingForInput: session.info.waitingForInput,
+      });
+    });
   }
 
   // Typed overloads

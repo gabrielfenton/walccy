@@ -1,5 +1,7 @@
 import * as crypto from 'crypto';
 import * as http from 'http';
+import * as os from 'os';
+import * as path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { SessionManager } from './session-manager.js';
@@ -118,6 +120,13 @@ export class WsServer {
 
   /** Track sessions that already have a data listener wired to avoid duplicates. */
   private wiredSessions: Set<string> = new Set();
+  /**
+   * Per-session pending OUTPUT line queue. We coalesce bursts of PTY data
+   * (which can arrive as 50-chunk bursts per visible block) into a single
+   * OUTPUT broadcast per turn of the event loop.
+   */
+  private pendingOutput: Map<string, BufferedLine[]> = new Map();
+  private outputScheduled: Set<string> = new Set();
 
   broadcastSessionAdded(session: SessionInfo): void {
     const msg: ServerMessage = { type: 'SESSION_ADDED', session };
@@ -128,8 +137,26 @@ export class WsServer {
       const sessionObj = this.sessionManager.getSession(session.id);
       if (sessionObj) {
         this.wiredSessions.add(session.id);
+        const sessionId = session.id;
         sessionObj.on('data', (lines: BufferedLine[]) => {
-          this.broadcastOutput(session.id, lines);
+          if (lines.length === 0) return;
+          let queue = this.pendingOutput.get(sessionId);
+          if (!queue) {
+            queue = [];
+            this.pendingOutput.set(sessionId, queue);
+          }
+          for (const l of lines) queue.push(l);
+
+          if (!this.outputScheduled.has(sessionId)) {
+            this.outputScheduled.add(sessionId);
+            setImmediate(() => {
+              this.outputScheduled.delete(sessionId);
+              const batch = this.pendingOutput.get(sessionId);
+              this.pendingOutput.delete(sessionId);
+              if (!batch || batch.length === 0) return;
+              this.broadcastOutput(sessionId, batch);
+            });
+          }
         });
       }
     }
@@ -138,8 +165,10 @@ export class WsServer {
   broadcastSessionRemoved(sessionId: string): void {
     const msg: ServerMessage = { type: 'SESSION_REMOVED', sessionId };
     this._broadcastAll(msg);
-    // Clean up wired session and expired input lock
+    // Clean up wired session, pending OUTPUT queue, expired input lock
     this.wiredSessions.delete(sessionId);
+    this.pendingOutput.delete(sessionId);
+    this.outputScheduled.delete(sessionId);
     this.inputLocks.delete(sessionId);
   }
 
@@ -202,12 +231,15 @@ export class WsServer {
     });
 
     ws.on('close', () => {
-      logger.debug(`WS client disconnected: ${clientId}`);
+      // Note: client.id may have been rebound during AUTH to the device-side
+      // persistent id. Always use client.id (current) for cleanup so the
+      // push-token entry registered post-AUTH is removed correctly.
+      logger.debug(`WS client disconnected: ${client.id}`);
       for (const sessionId of client.subscribedSessions) {
-        this.sessionManager.removeClientFromSession(sessionId, clientId);
+        this.sessionManager.removeClientFromSession(sessionId, client.id);
       }
-      this.pushService?.unregisterClient(clientId);
-      this.clients.delete(clientId);
+      this.pushService?.unregisterClient(client.id);
+      this.clients.delete(client.id);
     });
 
     ws.on('error', (err: Error) => {
@@ -222,7 +254,7 @@ export class WsServer {
       }
     }, 10000);
     authTimeout.unref();
-    (client as ConnectedClient & { authTimeout?: ReturnType<typeof setTimeout> }).authTimeout = authTimeout;
+    client.authTimeout = authTimeout;
   }
 
   private _handleMessage(client: ConnectedClient, msg: unknown): void {
@@ -293,47 +325,45 @@ export class WsServer {
   private static readonly MAX_INPUT_LENGTH = 64 * 1024; // 64 KB max input
 
   private _validateMessage(msg: ClientMessage): boolean {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const m = msg as any;
-    switch (m.type) {
+    switch (msg.type) {
       case 'AUTH':
-        return typeof m.secret === 'string' && typeof m.clientId === 'string';
+        return typeof msg.secret === 'string' && typeof msg.clientId === 'string';
       case 'LIST_SESSIONS':
       case 'PING':
         return true;
       case 'SUBSCRIBE':
         return (
-          typeof m.sessionId === 'string' &&
-          (m.fromLine === undefined || (typeof m.fromLine === 'number' && Number.isInteger(m.fromLine) && m.fromLine >= 0))
+          typeof msg.sessionId === 'string' &&
+          (msg.fromLine === undefined || (typeof msg.fromLine === 'number' && Number.isInteger(msg.fromLine) && msg.fromLine >= 0))
         );
       case 'UNSUBSCRIBE':
-        return typeof m.sessionId === 'string';
+        return typeof msg.sessionId === 'string';
       case 'INPUT':
         return (
-          typeof m.sessionId === 'string' &&
-          typeof m.data === 'string' &&
-          m.data.length <= WsServer.MAX_INPUT_LENGTH
+          typeof msg.sessionId === 'string' &&
+          typeof msg.data === 'string' &&
+          msg.data.length <= WsServer.MAX_INPUT_LENGTH
         );
       case 'RESIZE':
         return (
-          typeof m.sessionId === 'string' &&
-          typeof m.cols === 'number' && Number.isInteger(m.cols) && m.cols > 0 && m.cols <= 1000 &&
-          typeof m.rows === 'number' && Number.isInteger(m.rows) && m.rows > 0 && m.rows <= 500
+          typeof msg.sessionId === 'string' &&
+          typeof msg.cols === 'number' && Number.isInteger(msg.cols) && msg.cols > 0 && msg.cols <= 1000 &&
+          typeof msg.rows === 'number' && Number.isInteger(msg.rows) && msg.rows > 0 && msg.rows <= 500
         );
       case 'REGISTER_PUSH_TOKEN':
         return (
-          typeof m.token === 'string' && m.token.length > 0 &&
-          (m.platform === 'android' || m.platform === 'ios')
+          typeof msg.token === 'string' && msg.token.length > 0 &&
+          (msg.platform === 'android' || msg.platform === 'ios')
         );
       case 'LIST_DIRECTORIES':
-        return m.query === undefined || typeof m.query === 'string';
+        return msg.query === undefined || typeof msg.query === 'string';
       case 'SPAWN_SESSION':
         return (
-          typeof m.cwd === 'string' && m.cwd.length > 0 && m.cwd.length <= 4096 &&
-          typeof m.requestId === 'string' && m.requestId.length > 0
+          typeof msg.cwd === 'string' && msg.cwd.length > 0 && msg.cwd.length <= 4096 &&
+          typeof msg.requestId === 'string' && msg.requestId.length > 0
         );
       default:
-        return true; // Unknown types are handled by the switch default
+        return true; // Unknown types handled elsewhere
     }
   }
 
@@ -364,6 +394,23 @@ export class WsServer {
     if (client.authTimeout) {
       clearTimeout(client.authTimeout);
       client.authTimeout = undefined;
+    }
+
+    // Rebind to the device-supplied persistent clientId so push-token
+    // registrations survive reconnects. The transient connection UUID is
+    // only used until AUTH succeeds (so the auth-timeout cleanup works).
+    const requested = msg.clientId;
+    if (
+      typeof requested === 'string' &&
+      requested.length > 0 &&
+      requested.length <= 100 &&
+      !requested.includes('\0')
+    ) {
+      if (requested !== client.id) {
+        this.clients.delete(client.id);
+        client.id = requested;
+        this.clients.set(client.id, client);
+      }
     }
 
     const ok: ServerMessage = { type: 'AUTH_OK', clientId: client.id, daemonVersion: DAEMON_VERSION };
@@ -506,6 +553,24 @@ export class WsServer {
         type: 'SPAWN_RESULT',
         requestId: msg.requestId,
         error: `Directory not accessible: ${msg.cwd}`,
+      };
+      this._send(client.ws, reply);
+      return;
+    }
+
+    // Defence-in-depth: reject any cwd outside the user's home subtree.
+    // resolveAndValidate also enforces this, but spawn handlers are a juicy
+    // target so we re-check here in case the validator is bypassed.
+    const home = os.homedir();
+    const resolved = path.resolve(cwd);
+    if (resolved !== home && !resolved.startsWith(home + path.sep)) {
+      logger.warn(
+        `Rejected SPAWN_SESSION outside home: client=${client.id} cwd=${resolved}`
+      );
+      const reply: ServerMessage = {
+        type: 'SPAWN_RESULT',
+        requestId: msg.requestId,
+        error: 'cwd must be under your home directory',
       };
       this._send(client.ws, reply);
       return;
