@@ -44,7 +44,11 @@ var init_logger = __esm({
     fs2 = __toESM(require("fs"));
     logDir = path2.join(os2.homedir(), ".walccy", "logs");
     if (!fs2.existsSync(logDir)) {
-      fs2.mkdirSync(logDir, { recursive: true });
+      fs2.mkdirSync(logDir, { recursive: true, mode: 448 });
+    }
+    try {
+      fs2.chmodSync(logDir, 448);
+    } catch {
     }
     logFile = path2.join(logDir, "daemon.log");
     isForeground = process.env["WALCCY_FOREGROUND"] === "1";
@@ -55,12 +59,20 @@ var init_logger = __esm({
         // 10 MB
         maxFiles: 3,
         tailable: true,
+        // Forwarded to fs.createWriteStream so the log file lands at 0600.
+        options: { mode: 384 },
         format: winston.format.combine(
           winston.format.timestamp(),
           winston.format.json()
         )
       })
     ];
+    try {
+      if (fs2.existsSync(logFile)) {
+        fs2.chmodSync(logFile, 384);
+      }
+    } catch {
+    }
     if (isForeground) {
       transports2.push(
         new winston.transports.Console({
@@ -85,16 +97,16 @@ var init_logger = __esm({
 
 // src/wrap-server.ts
 function getWrapSocketPath() {
-  return path6.join(os4.homedir(), ".walccy", "wrap.sock");
+  return path7.join(os5.homedir(), ".walccy", "wrap.sock");
 }
-var fs5, net, os4, path6, WrapServer;
+var fs5, net, os5, path7, WrapServer;
 var init_wrap_server = __esm({
   "src/wrap-server.ts"() {
     "use strict";
     fs5 = __toESM(require("fs"));
     net = __toESM(require("net"));
-    os4 = __toESM(require("os"));
-    path6 = __toESM(require("path"));
+    os5 = __toESM(require("os"));
+    path7 = __toESM(require("path"));
     init_logger();
     WrapServer = class {
       constructor(sessionManager) {
@@ -105,28 +117,33 @@ var init_wrap_server = __esm({
       server = null;
       socketPath;
       async start() {
-        const dir = path6.dirname(this.socketPath);
+        const dir = path7.dirname(this.socketPath);
         if (!fs5.existsSync(dir)) fs5.mkdirSync(dir, { recursive: true, mode: 448 });
-        if (fs5.existsSync(this.socketPath)) {
-          try {
-            fs5.unlinkSync(this.socketPath);
-          } catch {
+        try {
+          fs5.chmodSync(dir, 448);
+        } catch {
+        }
+        try {
+          fs5.unlinkSync(this.socketPath);
+        } catch (err) {
+          if (err.code !== "ENOENT") {
+            logger_default.warn(`wrap: failed to remove stale socket: ${err.message}`);
           }
         }
         this.server = net.createServer((socket) => this.handleConnection(socket));
-        await new Promise((resolve3, reject) => {
+        await new Promise((resolve4, reject) => {
           if (!this.server) return reject(new Error("server not initialized"));
           this.server.once("error", reject);
           this.server.listen(this.socketPath, () => {
             fs5.chmodSync(this.socketPath, 384);
-            resolve3();
+            resolve4();
           });
         });
         logger_default.info(`Wrap IPC listening on ${this.socketPath}`);
       }
       async stop() {
         if (!this.server) return;
-        await new Promise((resolve3) => this.server.close(() => resolve3()));
+        await new Promise((resolve4) => this.server.close(() => resolve4()));
         if (fs5.existsSync(this.socketPath)) {
           try {
             fs5.unlinkSync(this.socketPath);
@@ -192,6 +209,144 @@ var init_wrap_server = __esm({
   }
 });
 
+// src/shell-installer.ts
+var shell_installer_exports = {};
+__export(shell_installer_exports, {
+  WRAPPED_ENV_VAR: () => WRAPPED_ENV_VAR,
+  installShellIntegration: () => installShellIntegration,
+  stripAllBlocks: () => stripAllBlocks,
+  uninstallShellIntegration: () => uninstallShellIntegration
+});
+function buildSnippet() {
+  return [
+    BEGIN,
+    VERSION_TAG,
+    "# Auto-wrap `claude` so output is mirrored to the walccy daemon.",
+    "# Skipped when " + WRAPPED_ENV_VAR + "=1 (already inside a wrap),",
+    "# or when walccy/claude are not on PATH.",
+    "claude() {",
+    '  if [ -n "${' + WRAPPED_ENV_VAR + ':-}" ]; then',
+    '    command claude "$@"',
+    "    return",
+    "  fi",
+    "  if ! command -v walccy >/dev/null 2>&1 || ! command -v claude >/dev/null 2>&1; then",
+    '    command claude "$@"',
+    "    return",
+    "  fi",
+    '  walccy wrap claude "$@"',
+    "}",
+    END,
+    ""
+  ].join("\n");
+}
+function candidateRcFiles(home = os7.homedir()) {
+  return [
+    { path: path9.join(home, ".bashrc"), shell: "bash" },
+    { path: path9.join(home, ".zshrc"), shell: "zsh" }
+  ];
+}
+function stripAllBlocks(content) {
+  let out = content;
+  while (true) {
+    const beginIdx = out.indexOf(BEGIN);
+    if (beginIdx === -1) break;
+    const endIdx = out.indexOf(END, beginIdx);
+    let cutEnd;
+    if (endIdx === -1) {
+      cutEnd = out.length;
+    } else {
+      cutEnd = endIdx + END.length;
+    }
+    let cutStart = beginIdx;
+    if (cutStart > 0 && out[cutStart - 1] === "\n") cutStart -= 1;
+    let trailing = cutEnd;
+    if (trailing < out.length && out[trailing] === "\n") trailing += 1;
+    out = out.slice(0, cutStart) + (cutStart > 0 ? "\n" : "") + out.slice(trailing);
+  }
+  return out;
+}
+function safeRewrite(filePath, nextContent) {
+  const lst = fs8.lstatSync(filePath);
+  if (lst.isSymbolicLink()) {
+    throw new Error(`refusing to follow symlink: ${filePath}`);
+  }
+  const mode = lst.mode & 511;
+  const dir = path9.dirname(filePath);
+  const tmp = path9.join(dir, `.${path9.basename(filePath)}.walccy.${process.pid}.tmp`);
+  fs8.writeFileSync(tmp, nextContent, { encoding: "utf8", mode });
+  try {
+    fs8.renameSync(tmp, filePath);
+  } catch (err) {
+    try {
+      fs8.unlinkSync(tmp);
+    } catch {
+    }
+    throw err;
+  }
+}
+function installShellIntegration(home = os7.homedir()) {
+  const result = { modified: [], skipped: [] };
+  const snippet = buildSnippet();
+  for (const rc of candidateRcFiles(home)) {
+    if (!fs8.existsSync(rc.path)) {
+      result.skipped.push(`${rc.path} (does not exist)`);
+      continue;
+    }
+    try {
+      const original = fs8.readFileSync(rc.path, "utf8");
+      const stripped = stripAllBlocks(original);
+      const needsLeadingNl = stripped.length > 0 && !stripped.endsWith("\n");
+      const next = stripped + (needsLeadingNl ? "\n" : "") + snippet;
+      if (next === original) {
+        result.skipped.push(`${rc.path} (already up to date)`);
+        continue;
+      }
+      safeRewrite(rc.path, next);
+      result.modified.push(rc.path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.skipped.push(`${rc.path} (${msg})`);
+    }
+  }
+  return result;
+}
+function uninstallShellIntegration(home = os7.homedir()) {
+  const result = { modified: [], skipped: [] };
+  for (const rc of candidateRcFiles(home)) {
+    if (!fs8.existsSync(rc.path)) {
+      result.skipped.push(`${rc.path} (does not exist)`);
+      continue;
+    }
+    try {
+      const original = fs8.readFileSync(rc.path, "utf8");
+      const stripped = stripAllBlocks(original);
+      if (stripped === original) {
+        result.skipped.push(`${rc.path} (no walccy block found)`);
+        continue;
+      }
+      safeRewrite(rc.path, stripped);
+      result.modified.push(rc.path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.skipped.push(`${rc.path} (${msg})`);
+    }
+  }
+  return result;
+}
+var fs8, os7, path9, WRAPPED_ENV_VAR, BEGIN, END, VERSION_TAG;
+var init_shell_installer = __esm({
+  "src/shell-installer.ts"() {
+    "use strict";
+    fs8 = __toESM(require("fs"));
+    os7 = __toESM(require("os"));
+    path9 = __toESM(require("path"));
+    WRAPPED_ENV_VAR = "WALCCY_WRAPPED";
+    BEGIN = "# >>> walccy shell integration >>>";
+    END = "# <<< walccy shell integration <<<";
+    VERSION_TAG = "# walccy-shell-integration v1";
+  }
+});
+
 // src/wrap-cli.ts
 var wrap_cli_exports = {};
 __export(wrap_cli_exports, {
@@ -200,7 +355,7 @@ __export(wrap_cli_exports, {
 function findInPath(cmd) {
   if (cmd.includes("/")) {
     try {
-      fs8.accessSync(cmd, fs8.constants.X_OK);
+      fs9.accessSync(cmd, fs9.constants.X_OK);
       return cmd;
     } catch {
       return null;
@@ -209,9 +364,9 @@ function findInPath(cmd) {
   const PATH = process.env["PATH"] ?? "";
   for (const dir of PATH.split(":")) {
     if (!dir) continue;
-    const full = path8.join(dir, cmd);
+    const full = path10.join(dir, cmd);
     try {
-      fs8.accessSync(full, fs8.constants.X_OK);
+      fs9.accessSync(full, fs9.constants.X_OK);
       return full;
     } catch {
     }
@@ -259,7 +414,10 @@ async function runWrapper(argv) {
       cols,
       rows,
       cwd: process.cwd(),
-      env: process.env
+      env: {
+        ...process.env,
+        [WRAPPED_ENV_VAR]: "1"
+      }
     });
   } catch (err) {
     restoreTty();
@@ -281,7 +439,7 @@ async function runWrapper(argv) {
         type: "REGISTER",
         pid: term.pid,
         cwd: process.cwd(),
-        name: path8.basename(process.cwd()) || process.cwd(),
+        name: path10.basename(process.cwd()) || process.cwd(),
         cols,
         rows
       }) + "\n"
@@ -315,6 +473,7 @@ async function runWrapper(argv) {
     }
   });
   socket.on("error", (err) => {
+    socketReady = false;
     process.stderr.write(`
 [walccy] daemon socket error: ${err.message} (continuing without mirror)
 `);
@@ -364,7 +523,7 @@ async function runWrapper(argv) {
     } catch {
     }
   });
-  await new Promise((resolve3) => {
+  await new Promise((resolve4) => {
     term.onExit(({ exitCode }) => {
       if (process.stdin.isTTY) {
         try {
@@ -379,26 +538,62 @@ async function runWrapper(argv) {
       setTimeout(() => {
         process.exit(exitCode);
       }, 50);
-      resolve3();
+      resolve4();
     });
   });
   return void 0;
 }
-var fs8, net2, path8;
+var fs9, net2, path10;
 var init_wrap_cli = __esm({
   "src/wrap-cli.ts"() {
     "use strict";
-    fs8 = __toESM(require("fs"));
+    fs9 = __toESM(require("fs"));
     net2 = __toESM(require("net"));
-    path8 = __toESM(require("path"));
+    path10 = __toESM(require("path"));
     init_wrap_server();
+    init_shell_installer();
   }
 });
 
 // src/index.ts
 var import_commander = require("commander");
-var os6 = __toESM(require("os"));
-var path9 = __toESM(require("path"));
+var crypto4 = __toESM(require("crypto"));
+var os8 = __toESM(require("os"));
+var path11 = __toESM(require("path"));
+
+// package.json
+var package_default = {
+  name: "walccyd",
+  version: "1.0.0",
+  private: true,
+  bin: {
+    walccy: "./dist/index.js"
+  },
+  main: "./dist/index.js",
+  scripts: {
+    dev: "tsx watch src/index.ts",
+    build: "tsup src/index.ts --format cjs --dts",
+    start: "node dist/index.js",
+    test: "vitest run"
+  },
+  dependencies: {
+    commander: "^12.1.0",
+    "node-pty": "^1.0.0",
+    "qrcode-terminal": "^0.12.0",
+    uuid: "^10.0.0",
+    winston: "^3.13.0",
+    ws: "^8.17.0"
+  },
+  devDependencies: {
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.10",
+    tsup: "^8.1.0",
+    tsx: "^4.15.0",
+    typescript: "^5.5.0",
+    vitest: "^4.1.2"
+  }
+};
 
 // src/config.ts
 var fs = __toESM(require("fs"));
@@ -582,6 +777,7 @@ var Session = class _Session extends import_events.EventEmitter {
   _partialLine = "";
   /** Timer for detecting idle state (waiting for input). */
   _idleTimer = null;
+  _exitWatcher = null;
   static IDLE_TIMEOUT_MS = 3e3;
   constructor(pid, cwd, name, maxBufferLines = 1e4) {
     super();
@@ -744,15 +940,9 @@ var Session = class _Session extends import_events.EventEmitter {
       );
       return;
     }
-    const line = this.buffer.push({
-      rawContent: data,
-      content: data,
-      timestamp: Date.now(),
-      source: "input",
-      inputClientId: clientId
-    });
-    this.emit("data", [line]);
+    void clientId;
     this.pty.write(data);
+    return;
   }
   resize(cols, rows) {
     if (this.wrapperSocket) {
@@ -768,6 +958,10 @@ var Session = class _Session extends import_events.EventEmitter {
     if (this._idleTimer) {
       clearTimeout(this._idleTimer);
       this._idleTimer = null;
+    }
+    if (this._exitWatcher) {
+      clearInterval(this._exitWatcher);
+      this._exitWatcher = null;
     }
     if (this.pty) {
       try {
@@ -878,10 +1072,12 @@ var Session = class _Session extends import_events.EventEmitter {
     const timer = setInterval(() => {
       if (!fs3.existsSync(procDir)) {
         clearInterval(timer);
+        this._exitWatcher = null;
         this._info.status = "ended";
         this.emit("exit");
       }
     }, 2e3);
+    this._exitWatcher = timer;
     timer.unref();
   }
 };
@@ -914,14 +1110,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     const session = new Session(pid, cwd, name, this.maxBufferLines);
     this.sessions.set(session.id, session);
     this.pidToSessionId.set(pid, session.id);
-    session.on("data", () => {
-      this.emit("session-updated", session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput
-      });
-    });
+    this.wireSessionEvents(session);
     session.on("exit", () => {
       logger_default.info(`Session ${session.id} (pid=${pid}) exited`);
       this.removeSession(session.id);
@@ -939,14 +1128,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     const name = this.deriveName(cwd);
     const session = new Session(0, cwd, name, this.maxBufferLines);
     this.sessions.set(session.id, session);
-    session.on("data", () => {
-      this.emit("session-updated", session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput
-      });
-    });
+    this.wireSessionEvents(session);
     session.on("exit", () => {
       logger_default.info(`Spawned session ${session.id} exited`);
       this.removeSession(session.id);
@@ -966,14 +1148,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     session.attachWrapper(socket);
     this.sessions.set(session.id, session);
     if (pid > 0) this.pidToSessionId.set(pid, session.id);
-    session.on("data", () => {
-      this.emit("session-updated", session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput
-      });
-    });
+    this.wireSessionEvents(session);
     session.on("exit", () => {
       logger_default.info(`Wrapped session ${session.id} (pid=${pid}) exited`);
       this.removeSession(session.id);
@@ -1029,6 +1204,17 @@ var SessionManager = class extends import_events2.EventEmitter {
   // ────────────────────────────────────────────
   deriveName(cwd) {
     return path3.basename(cwd) || cwd;
+  }
+  /** Forward session 'data' events as session-updated metadata broadcasts. */
+  wireSessionEvents(session) {
+    session.on("data", () => {
+      this.emit("session-updated", session.id, {
+        lastActivityAt: session.info.lastActivityAt,
+        lineCount: session.info.lineCount,
+        status: session.info.status,
+        waitingForInput: session.info.waitingForInput
+      });
+    });
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   on(event, listener) {
@@ -1142,6 +1328,8 @@ var ProcessScanner = class extends import_events3.EventEmitter {
 // src/ws-server.ts
 var crypto2 = __toESM(require("crypto"));
 var http = __toESM(require("http"));
+var os4 = __toESM(require("os"));
+var path6 = __toESM(require("path"));
 var import_ws = require("ws");
 var import_uuid2 = require("uuid");
 
@@ -1224,8 +1412,13 @@ var DirectoryScanner = class {
       expanded = path5.join(this.homeDir, expanded.slice(2));
     }
     const resolved = path5.resolve(expanded);
+    if (!this.isUnderHome(resolved)) return null;
     if (!this.isReadableDir(resolved)) return null;
     return resolved;
+  }
+  /** True iff `p` is the user's home directory or a descendant. */
+  isUnderHome(p) {
+    return p === this.homeDir || p.startsWith(this.homeDir + path5.sep);
   }
   // ────────────────────────────────────────────
   // Internals
@@ -1305,42 +1498,6 @@ function recentCwdsFromSessions(sessions) {
 
 // src/ws-server.ts
 init_logger();
-
-// package.json
-var package_default = {
-  name: "walccyd",
-  version: "1.0.0",
-  private: true,
-  bin: {
-    walccy: "./dist/index.js"
-  },
-  main: "./dist/index.js",
-  scripts: {
-    dev: "tsx watch src/index.ts",
-    build: "tsup src/index.ts --format cjs --dts",
-    start: "node dist/index.js",
-    test: "vitest run"
-  },
-  dependencies: {
-    commander: "^12.1.0",
-    "node-pty": "^1.0.0",
-    "qrcode-terminal": "^0.12.0",
-    uuid: "^10.0.0",
-    winston: "^3.13.0",
-    ws: "^8.17.0"
-  },
-  devDependencies: {
-    "@types/node": "^20.0.0",
-    "@types/uuid": "^10.0.0",
-    "@types/ws": "^8.5.10",
-    tsup: "^8.1.0",
-    tsx: "^4.15.0",
-    typescript: "^5.5.0",
-    vitest: "^4.1.2"
-  }
-};
-
-// src/ws-server.ts
 var DAEMON_VERSION = package_default.version;
 var INPUT_LOCK_TTL_MS = 2e3;
 var WsServer = class _WsServer {
@@ -1372,12 +1529,12 @@ var WsServer = class _WsServer {
     this.wss.on("connection", (ws) => {
       this._handleConnection(ws);
     });
-    await new Promise((resolve3, reject) => {
+    await new Promise((resolve4, reject) => {
       this.httpServer.listen(this.config.port, this.bindAddress, () => {
         logger_default.info(
           `WebSocket server listening on ws://${this.bindAddress}:${this.config.port}`
         );
-        resolve3();
+        resolve4();
       });
       this.httpServer.once("error", reject);
     });
@@ -1404,6 +1561,13 @@ var WsServer = class _WsServer {
   // ────────────────────────────────────────────
   /** Track sessions that already have a data listener wired to avoid duplicates. */
   wiredSessions = /* @__PURE__ */ new Set();
+  /**
+   * Per-session pending OUTPUT line queue. We coalesce bursts of PTY data
+   * (which can arrive as 50-chunk bursts per visible block) into a single
+   * OUTPUT broadcast per turn of the event loop.
+   */
+  pendingOutput = /* @__PURE__ */ new Map();
+  outputScheduled = /* @__PURE__ */ new Set();
   broadcastSessionAdded(session) {
     const msg = { type: "SESSION_ADDED", session };
     this._broadcastAll(msg);
@@ -1411,8 +1575,25 @@ var WsServer = class _WsServer {
       const sessionObj = this.sessionManager.getSession(session.id);
       if (sessionObj) {
         this.wiredSessions.add(session.id);
+        const sessionId = session.id;
         sessionObj.on("data", (lines) => {
-          this.broadcastOutput(session.id, lines);
+          if (lines.length === 0) return;
+          let queue = this.pendingOutput.get(sessionId);
+          if (!queue) {
+            queue = [];
+            this.pendingOutput.set(sessionId, queue);
+          }
+          for (const l of lines) queue.push(l);
+          if (!this.outputScheduled.has(sessionId)) {
+            this.outputScheduled.add(sessionId);
+            setImmediate(() => {
+              this.outputScheduled.delete(sessionId);
+              const batch = this.pendingOutput.get(sessionId);
+              this.pendingOutput.delete(sessionId);
+              if (!batch || batch.length === 0) return;
+              this.broadcastOutput(sessionId, batch);
+            });
+          }
         });
       }
     }
@@ -1421,6 +1602,8 @@ var WsServer = class _WsServer {
     const msg = { type: "SESSION_REMOVED", sessionId };
     this._broadcastAll(msg);
     this.wiredSessions.delete(sessionId);
+    this.pendingOutput.delete(sessionId);
+    this.outputScheduled.delete(sessionId);
     this.inputLocks.delete(sessionId);
   }
   broadcastSessionUpdated(sessionId, changes) {
@@ -1470,12 +1653,12 @@ var WsServer = class _WsServer {
       this._handleMessage(client, msg);
     });
     ws.on("close", () => {
-      logger_default.debug(`WS client disconnected: ${clientId}`);
+      logger_default.debug(`WS client disconnected: ${client.id}`);
       for (const sessionId of client.subscribedSessions) {
-        this.sessionManager.removeClientFromSession(sessionId, clientId);
+        this.sessionManager.removeClientFromSession(sessionId, client.id);
       }
-      this.pushService?.unregisterClient(clientId);
-      this.clients.delete(clientId);
+      this.pushService?.unregisterClient(client.id);
+      this.clients.delete(client.id);
     });
     ws.on("error", (err) => {
       logger_default.warn(`WS client ${clientId} error: ${err.message}`);
@@ -1548,27 +1731,26 @@ var WsServer = class _WsServer {
   static MAX_INPUT_LENGTH = 64 * 1024;
   // 64 KB max input
   _validateMessage(msg) {
-    const m = msg;
-    switch (m.type) {
+    switch (msg.type) {
       case "AUTH":
-        return typeof m.secret === "string" && typeof m.clientId === "string";
+        return typeof msg.secret === "string" && typeof msg.clientId === "string";
       case "LIST_SESSIONS":
       case "PING":
         return true;
       case "SUBSCRIBE":
-        return typeof m.sessionId === "string" && (m.fromLine === void 0 || typeof m.fromLine === "number" && Number.isInteger(m.fromLine) && m.fromLine >= 0);
+        return typeof msg.sessionId === "string" && (msg.fromLine === void 0 || typeof msg.fromLine === "number" && Number.isInteger(msg.fromLine) && msg.fromLine >= 0);
       case "UNSUBSCRIBE":
-        return typeof m.sessionId === "string";
+        return typeof msg.sessionId === "string";
       case "INPUT":
-        return typeof m.sessionId === "string" && typeof m.data === "string" && m.data.length <= _WsServer.MAX_INPUT_LENGTH;
+        return typeof msg.sessionId === "string" && typeof msg.data === "string" && msg.data.length <= _WsServer.MAX_INPUT_LENGTH;
       case "RESIZE":
-        return typeof m.sessionId === "string" && typeof m.cols === "number" && Number.isInteger(m.cols) && m.cols > 0 && m.cols <= 1e3 && typeof m.rows === "number" && Number.isInteger(m.rows) && m.rows > 0 && m.rows <= 500;
+        return typeof msg.sessionId === "string" && typeof msg.cols === "number" && Number.isInteger(msg.cols) && msg.cols > 0 && msg.cols <= 1e3 && typeof msg.rows === "number" && Number.isInteger(msg.rows) && msg.rows > 0 && msg.rows <= 500;
       case "REGISTER_PUSH_TOKEN":
-        return typeof m.token === "string" && m.token.length > 0 && (m.platform === "android" || m.platform === "ios");
+        return typeof msg.token === "string" && msg.token.length > 0 && (msg.platform === "android" || msg.platform === "ios");
       case "LIST_DIRECTORIES":
-        return m.query === void 0 || typeof m.query === "string";
+        return msg.query === void 0 || typeof msg.query === "string";
       case "SPAWN_SESSION":
-        return typeof m.cwd === "string" && m.cwd.length > 0 && m.cwd.length <= 4096 && typeof m.requestId === "string" && m.requestId.length > 0;
+        return typeof msg.cwd === "string" && msg.cwd.length > 0 && msg.cwd.length <= 4096 && typeof msg.requestId === "string" && msg.requestId.length > 0;
       default:
         return true;
     }
@@ -1595,6 +1777,14 @@ var WsServer = class _WsServer {
     if (client.authTimeout) {
       clearTimeout(client.authTimeout);
       client.authTimeout = void 0;
+    }
+    const requested = msg.clientId;
+    if (typeof requested === "string" && requested.length > 0 && requested.length <= 100 && !requested.includes("\0")) {
+      if (requested !== client.id) {
+        this.clients.delete(client.id);
+        client.id = requested;
+        this.clients.set(client.id, client);
+      }
     }
     const ok = { type: "AUTH_OK", clientId: client.id, daemonVersion: DAEMON_VERSION };
     this._send(client.ws, ok);
@@ -1695,6 +1885,20 @@ var WsServer = class _WsServer {
       this._send(client.ws, reply);
       return;
     }
+    const home = os4.homedir();
+    const resolved = path6.resolve(cwd);
+    if (resolved !== home && !resolved.startsWith(home + path6.sep)) {
+      logger_default.warn(
+        `Rejected SPAWN_SESSION outside home: client=${client.id} cwd=${resolved}`
+      );
+      const reply = {
+        type: "SPAWN_RESULT",
+        requestId: msg.requestId,
+        error: "cwd must be under your home directory"
+      };
+      this._send(client.ws, reply);
+      return;
+    }
     try {
       const session = await this.sessionManager.spawnSession(cwd);
       const reply = {
@@ -1790,7 +1994,7 @@ function createJwt(sa) {
 }
 async function getAccessToken(sa) {
   const jwt = createJwt(sa);
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const body = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
     const url = new URL(sa.token_uri);
     const req = https.request(
@@ -1810,7 +2014,7 @@ async function getAccessToken(sa) {
           try {
             const parsed = JSON.parse(data);
             if (parsed.access_token) {
-              resolve3(parsed.access_token);
+              resolve4(parsed.access_token);
             } else {
               reject(new Error(`OAuth token response missing access_token: ${data}`));
             }
@@ -1835,6 +2039,14 @@ var PushService = class {
     const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
     try {
       if (fs6.existsSync(saPath)) {
+        const stat = fs6.statSync(saPath);
+        const looseBits = stat.mode & 63;
+        if (looseBits !== 0) {
+          const modeStr = (stat.mode & 511).toString(8).padStart(3, "0");
+          logger_default.warn(
+            `fcm-service-account.json mode is 0${modeStr} \u2014 readable by group/other. FCM private key should be 0600. Run: chmod 600 ${saPath}`
+          );
+        }
         const raw = fs6.readFileSync(saPath, "utf-8");
         this.serviceAccount = JSON.parse(raw);
         logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
@@ -1895,7 +2107,7 @@ var PushService = class {
         ...data ? { data } : {}
       }
     };
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const payload = JSON.stringify(message);
       const req = https.request(
         {
@@ -1914,7 +2126,7 @@ var PushService = class {
           res.on("end", () => {
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
               logger_default.debug(`FCM push sent to ${pushToken.clientId}`);
-              resolve3();
+              resolve4();
             } else {
               logger_default.warn(
                 `FCM push failed (${res.statusCode}): ${responseData}`
@@ -1927,14 +2139,14 @@ var PushService = class {
                   this.pushTokens.delete(pushToken.clientId);
                 }
               }
-              resolve3();
+              resolve4();
             }
           });
         }
       );
       req.on("error", (err) => {
         logger_default.warn(`FCM request error: ${err.message}`);
-        resolve3();
+        resolve4();
       });
       req.write(payload);
       req.end();
@@ -1985,7 +2197,7 @@ async function waitForTailscale(intervalMs = 1e4, maxRetries = 30) {
   );
 }
 function delay(ms) {
-  return new Promise((resolve3) => setTimeout(resolve3, ms));
+  return new Promise((resolve4) => setTimeout(resolve4, ms));
 }
 
 // src/daemon.ts
@@ -2051,20 +2263,20 @@ var Daemon = class {
 
 // src/installer.ts
 var fs7 = __toESM(require("fs"));
-var path7 = __toESM(require("path"));
-var os5 = __toESM(require("os"));
+var path8 = __toESM(require("path"));
+var os6 = __toESM(require("os"));
 var import_child_process2 = require("child_process");
 var import_util2 = require("util");
 var execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
 function getServiceDir() {
-  return path7.join(os5.homedir(), ".config", "systemd", "user");
+  return path8.join(os6.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path7.join(getServiceDir(), "walccy.service");
+  return path8.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path7.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path8.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -2147,7 +2359,7 @@ async function getServiceStatus() {
 // src/index.ts
 var qrcode = require("qrcode-terminal");
 var program = new import_commander.Command();
-program.name("walccy").version("1.0.0").description("Walccy \u2014 Claude session daemon");
+program.name("walccy").version(package_default.version).description("Walccy \u2014 Claude session daemon");
 program.command("start").description("Start the Walccy daemon").option("-f, --foreground", "Run in the foreground (blocks)", false).action(async (opts) => {
   if (!opts.foreground) {
     console.log(
@@ -2195,7 +2407,12 @@ program.command("status").description("Show daemon status").action(async () => {
   console.log(`Service status : ${status}`);
   console.log(`Config file    : ${getConfigPath()}`);
   console.log(`Port           : ${config.port}`);
-  console.log(`Auth secret    : ${config.authSecret.slice(0, 8)}\u2026 (truncated)`);
+  if (config.authSecret) {
+    const fp = crypto4.createHash("sha256").update(config.authSecret).digest("hex").slice(0, 8);
+    console.log(`Auth secret    : set (fp: ${fp})`);
+  } else {
+    console.log(`Auth secret    : unset`);
+  }
   console.log(`Tailscale IP   : ${tailscaleIP ?? "(not available)"}`);
   console.log(`Dev mode       : ${process.env["WALCCY_DEV_MODE"] === "1" ? "yes" : "no"}`);
 });
@@ -2220,11 +2437,9 @@ program.command("sessions").description("List active sessions as JSON (reads dae
       })
     );
   });
-  let authed = false;
   ws.on("message", (raw) => {
     const msg = JSON.parse(raw.toString());
     if (msg.type === "AUTH_OK") {
-      authed = true;
       ws.send(JSON.stringify({ type: "LIST_SESSIONS" }));
     } else if (msg.type === "SESSIONS") {
       clearTimeout(timeout);
@@ -2236,7 +2451,6 @@ program.command("sessions").description("List active sessions as JSON (reads dae
       ws.close();
       process.exit(1);
     }
-    void authed;
   });
   ws.on("error", (err) => {
     clearTimeout(timeout);
@@ -2248,7 +2462,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os6.hostname();
+  const hostname2 = os8.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -2307,15 +2521,15 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path9.dirname(configPath);
-        const fs9 = await import("fs");
-        if (fs9.existsSync(configDir)) {
-          fs9.rmSync(configDir, { recursive: true, force: true });
+        const configDir = path11.dirname(configPath);
+        const fs10 = await import("fs");
+        if (fs10.existsSync(configDir)) {
+          fs10.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path9.join(os6.homedir(), ".walccy");
-        if (fs9.existsSync(logDir2)) {
-          fs9.rmSync(logDir2, { recursive: true, force: true });
+        const logDir2 = path11.join(os8.homedir(), ".walccy");
+        if (fs10.existsSync(logDir2)) {
+          fs10.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");
@@ -2337,6 +2551,31 @@ program.command("unregister-session").description("Unregister a shell session (u
   process.stdout.write(`[walccy] session unregistered: pid=${pid}
 `);
 });
+program.command("install-shell").description(
+  "Install a shell function in your bashrc/zshrc so that running `claude` automatically wraps it via walccy."
+).action(async () => {
+  const { installShellIntegration: installShellIntegration2 } = await Promise.resolve().then(() => (init_shell_installer(), shell_installer_exports));
+  const result = installShellIntegration2();
+  for (const p of result.modified) {
+    console.log(`  modified: ${p}`);
+  }
+  for (const s of result.skipped) {
+    console.log(`  skipped:  ${s}`);
+  }
+  if (result.modified.length > 0) {
+    console.log("\nOpen a new shell (or `source` the file above) to activate.");
+  }
+});
+program.command("uninstall-shell").description("Remove the walccy shell integration from your bashrc/zshrc.").action(async () => {
+  const { uninstallShellIntegration: uninstallShellIntegration2 } = await Promise.resolve().then(() => (init_shell_installer(), shell_installer_exports));
+  const result = uninstallShellIntegration2();
+  for (const p of result.modified) {
+    console.log(`  cleaned:  ${p}`);
+  }
+  for (const s of result.skipped) {
+    console.log(`  skipped:  ${s}`);
+  }
+});
 program.command("wrap").description(
   "Run a command (default: claude) inside a PTY whose output is mirrored to the running daemon, so the mobile app can see it and send input back."
 ).argument("[args...]", 'Command and arguments (defaults to "claude")').allowUnknownOption(true).action(async (args) => {
@@ -2344,18 +2583,7 @@ program.command("wrap").description(
   await runWrapper2(args ?? []);
 });
 var KNOWN_SUBCOMMANDS = /* @__PURE__ */ new Set([
-  "start",
-  "stop",
-  "status",
-  "sessions",
-  "pair",
-  "config",
-  "init",
-  "install-service",
-  "uninstall",
-  "register-session",
-  "unregister-session",
-  "wrap",
+  ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
   "help"
 ]);
 var firstArg = process.argv[2];
