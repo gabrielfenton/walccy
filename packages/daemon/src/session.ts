@@ -40,6 +40,7 @@ export class Session extends EventEmitter {
   private _partialLine: string = '';
   /** Timer for detecting idle state (waiting for input). */
   private _idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private _exitWatcher: ReturnType<typeof setInterval> | null = null;
   private static readonly IDLE_TIMEOUT_MS = 3000;
 
   constructor(pid: number, cwd: string, name: string, maxBufferLines = 10000) {
@@ -226,8 +227,11 @@ export class Session extends EventEmitter {
 
     this._info.lastActivityAt = Date.now();
 
+    // Both wrap and spawn modes record stdout via the PTY echo, so we
+    // don't synthesize an input-source line.  Skipping this also prevents
+    // "(local) input line" + "(remote echo) stdout line" duplication in
+    // mobile scrollback for any cooked-mode child (bash, sh).
     if (this.wrapperSocket) {
-      // PTY echo will land in our buffer as stdout; skip recording the input line.
       this.wrapperSocket.write(
         JSON.stringify({
           type: 'INPUT',
@@ -237,17 +241,9 @@ export class Session extends EventEmitter {
       return;
     }
 
-    // Spawn mode: record input line so the user sees what they typed even
-    // when the TUI doesn't echo it back.
-    const line = this.buffer.push({
-      rawContent: data,
-      content: data,
-      timestamp: Date.now(),
-      source: 'input',
-      inputClientId: clientId,
-    });
-    this.emit('data', [line]);
+    void clientId;
     this.pty!.write(data);
+    return;
   }
 
   resize(cols: number, rows: number): void {
@@ -265,6 +261,11 @@ export class Session extends EventEmitter {
     if (this._idleTimer) {
       clearTimeout(this._idleTimer);
       this._idleTimer = null;
+    }
+
+    if (this._exitWatcher) {
+      clearInterval(this._exitWatcher);
+      this._exitWatcher = null;
     }
 
     if (this.pty) {
@@ -389,10 +390,13 @@ export class Session extends EventEmitter {
     const timer = setInterval(() => {
       if (!fs.existsSync(procDir)) {
         clearInterval(timer);
+        this._exitWatcher = null;
         this._info.status = 'ended';
         this.emit('exit');
       }
     }, 2000);
+
+    this._exitWatcher = timer;
 
     // Don't let this timer keep the process alive
     timer.unref();
