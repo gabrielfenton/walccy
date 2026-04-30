@@ -25,6 +25,32 @@ export async function runWrapper(argv: string[]): Promise<never> {
   const cmd = argv[0]!;
   const args = argv.slice(1);
 
+  // Single TTY restorer wired to every exit path so a crash mid-setup
+  // can't leave the user's shell stuck in raw mode.
+  const restoreTty = () => {
+    if (process.stdin.isTTY) {
+      try {
+        process.stdin.setRawMode(false);
+      } catch {
+        // already non-tty / already restored
+      }
+    }
+  };
+  process.on('exit', restoreTty);
+  process.on('uncaughtException', (err) => {
+    restoreTty();
+    console.error(err);
+    process.exit(1);
+  });
+  process.on('SIGINT', () => {
+    restoreTty();
+    process.exit(130);
+  });
+  process.on('SIGTERM', () => {
+    restoreTty();
+    process.exit(143);
+  });
+
   // Lazy require so importing this module doesn't drag node-pty into the
   // daemon's hot path unless the wrap subcommand is actually used.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -33,13 +59,26 @@ export async function runWrapper(argv: string[]): Promise<never> {
   const cols = process.stdout.columns ?? 80;
   const rows = process.stdout.rows ?? 24;
 
-  const term = pty.spawn(cmd, args, {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd: process.cwd(),
-    env: process.env as Record<string, string>,
-  });
+  let term: import('node-pty').IPty;
+  try {
+    term = pty.spawn(cmd, args, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd: process.cwd(),
+      env: process.env as Record<string, string>,
+    });
+  } catch (err) {
+    restoreTty();
+    const e = err as NodeJS.ErrnoException;
+    if (e && e.code === 'ENOENT') {
+      process.stderr.write(`walccy: command not found: ${cmd}\n`);
+    } else {
+      const msg = (e && e.message) || String(err);
+      process.stderr.write(`walccy: failed to spawn ${cmd}: ${msg}\n`);
+    }
+    process.exit(127);
+  }
 
   const socket = net.createConnection(getWrapSocketPath());
 
@@ -93,16 +132,36 @@ export async function runWrapper(argv: string[]): Promise<never> {
     socketReady = false;
   });
 
-  // ── PTY → user terminal AND daemon
+  // ── PTY → user terminal AND daemon (with backpressure-aware mirror)
+  // Local stdout is never throttled; only the daemon mirror gets dropped
+  // when the kernel buffer is saturated, to keep wrapper RSS bounded.
+  const MAX_PENDING_BYTES = 1 * 1024 * 1024; // 1 MB
+  let pendingBytes = 0;
+  let warnedDropping = false;
+  socket.on('drain', () => {
+    pendingBytes = 0;
+    warnedDropping = false;
+  });
+
   term.onData((data: string) => {
     process.stdout.write(data);
     if (socketReady) {
-      socket.write(
+      if (pendingBytes > MAX_PENDING_BYTES) {
+        if (!warnedDropping) {
+          warnedDropping = true;
+          process.stderr.write('\n[walccy] mirror dropping frames (daemon stalled)\n');
+        }
+        return;
+      }
+      const payload =
         JSON.stringify({
           type: 'OUTPUT',
           data: Buffer.from(data, 'utf8').toString('base64'),
-        }) + '\n'
-      );
+        }) + '\n';
+      const flushed = socket.write(payload);
+      if (!flushed) {
+        pendingBytes += Buffer.byteLength(payload);
+      }
     }
   });
 
