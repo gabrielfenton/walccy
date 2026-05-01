@@ -1372,14 +1372,6 @@ var ProcessScanner = class extends import_events3.EventEmitter {
   }
 };
 
-// src/ws-server.ts
-var crypto2 = __toESM(require("crypto"));
-var http = __toESM(require("http"));
-var os4 = __toESM(require("os"));
-var path6 = __toESM(require("path"));
-var import_ws = require("ws");
-var import_uuid2 = require("uuid");
-
 // src/directory-scanner.ts
 var fs4 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
@@ -1543,195 +1535,124 @@ function recentCwdsFromSessions(sessions) {
   return out;
 }
 
-// src/ws-server.ts
+// src/client-registry.ts
+var import_ws = require("ws");
 init_logger();
-var DAEMON_VERSION = package_default.version;
 var INPUT_LOCK_TTL_MS = 2e3;
-var WsServer = class _WsServer {
-  constructor(sessionManager, config, bindAddress, pushService) {
+var ClientRegistry = class {
+  constructor(sessionManager, pushService) {
     this.sessionManager = sessionManager;
-    this.config = config;
-    this.bindAddress = bindAddress;
     this.pushService = pushService;
   }
   sessionManager;
-  config;
-  bindAddress;
   pushService;
-  httpServer = null;
-  wss = null;
   clients = /* @__PURE__ */ new Map();
   inputLocks = /* @__PURE__ */ new Map();
-  directoryScanner = new DirectoryScanner();
-  // ────────────────────────────────────────────
-  // Lifecycle
-  // ────────────────────────────────────────────
-  async start() {
-    this.httpServer = http.createServer();
-    this.wss = new import_ws.WebSocketServer({
-      server: this.httpServer,
-      maxPayload: 1024 * 1024
-      // 1 MB max message size
-    });
-    this.wss.on("connection", (ws) => {
-      this._handleConnection(ws);
-    });
-    await new Promise((resolve4, reject) => {
-      this.httpServer.listen(this.config.port, this.bindAddress, () => {
-        logger_default.info(
-          `WebSocket server listening on ws://${this.bindAddress}:${this.config.port}`
-        );
-        resolve4();
-      });
-      this.httpServer.once("error", reject);
-    });
-    this.sessionManager.on("session-added", (session) => {
-      this.broadcastSessionAdded(session);
-    });
-    this.sessionManager.on("session-removed", (sessionId) => {
-      this.broadcastSessionRemoved(sessionId);
-    });
-    this.sessionManager.on(
-      "session-updated",
-      (sessionId, changes) => {
-        this.broadcastSessionUpdated(sessionId, changes);
-      }
-    );
+  // ────────── client lifecycle ──────────
+  add(client) {
+    this.clients.set(client.id, client);
   }
-  stop() {
-    this.wss?.close();
-    this.httpServer?.close();
-    logger_default.info("WebSocket server stopped");
+  get(clientId) {
+    return this.clients.get(clientId);
   }
-  // ────────────────────────────────────────────
-  // Broadcast helpers
-  // ────────────────────────────────────────────
-  /** Track sessions that already have a data listener wired to avoid duplicates. */
-  wiredSessions = /* @__PURE__ */ new Set();
   /**
-   * Per-session pending OUTPUT line queue. We coalesce bursts of PTY data
-   * (which can arrive as 50-chunk bursts per visible block) into a single
-   * OUTPUT broadcast per turn of the event loop.
+   * Rebind a client to a new (persistent) id — used during AUTH so device-
+   * supplied stable ids survive reconnects (push-token bookkeeping).
    */
-  pendingOutput = /* @__PURE__ */ new Map();
-  outputScheduled = /* @__PURE__ */ new Set();
-  broadcastSessionAdded(session) {
-    const msg = { type: "SESSION_ADDED", session };
-    this._broadcastAll(msg);
-    if (!this.wiredSessions.has(session.id)) {
-      const sessionObj = this.sessionManager.getSession(session.id);
-      if (sessionObj) {
-        this.wiredSessions.add(session.id);
-        const sessionId = session.id;
-        sessionObj.on("data", (lines) => {
-          if (lines.length === 0) return;
-          let queue = this.pendingOutput.get(sessionId);
-          if (!queue) {
-            queue = [];
-            this.pendingOutput.set(sessionId, queue);
-          }
-          for (const l of lines) queue.push(l);
-          if (!this.outputScheduled.has(sessionId)) {
-            this.outputScheduled.add(sessionId);
-            setImmediate(() => {
-              this.outputScheduled.delete(sessionId);
-              const batch = this.pendingOutput.get(sessionId);
-              this.pendingOutput.delete(sessionId);
-              if (!batch || batch.length === 0) return;
-              this.broadcastOutput(sessionId, batch);
-            });
-          }
-        });
-      }
-    }
+  rebind(client, newId) {
+    if (newId === client.id) return;
+    this.clients.delete(client.id);
+    client.id = newId;
+    this.clients.set(client.id, client);
   }
-  broadcastSessionRemoved(sessionId) {
-    const msg = { type: "SESSION_REMOVED", sessionId };
-    this._broadcastAll(msg);
-    this.wiredSessions.delete(sessionId);
-    this.pendingOutput.delete(sessionId);
-    this.outputScheduled.delete(sessionId);
+  /**
+   * Disconnect cleanup. Always uses client.id (current) so that AUTH-rebound
+   * persistent ids are correctly removed from the push-service registry.
+   */
+  remove(client) {
+    for (const sessionId of client.subscribedSessions) {
+      this.sessionManager.removeClientFromSession(sessionId, client.id);
+    }
+    this.pushService?.unregisterClient(client.id);
+    this.clients.delete(client.id);
+  }
+  // ────────── input locks ──────────
+  getInputLock(sessionId) {
+    return this.inputLocks.get(sessionId);
+  }
+  setInputLock(sessionId, lock) {
+    this.inputLocks.set(sessionId, lock);
+  }
+  clearInputLock(sessionId) {
     this.inputLocks.delete(sessionId);
   }
-  broadcastSessionUpdated(sessionId, changes) {
-    const msg = { type: "SESSION_UPDATED", sessionId, changes };
-    this._broadcastAll(msg);
-    if (changes.waitingForInput === true && this.pushService?.isEnabled) {
-      const session = this.sessionManager.getSession(sessionId);
-      const name = session?.info.name ?? "Claude";
-      this.pushService.sendToAll(
-        `${name} needs input`,
-        "Claude has finished its task and is waiting for your response.",
-        { sessionId }
-      ).catch((err) => {
-        logger_default.warn(`FCM push error: ${String(err)}`);
-      });
+  // ────────── send / broadcast ──────────
+  send(ws, msg) {
+    if (ws.readyState !== import_ws.WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify(msg));
+    } catch (err) {
+      logger_default.debug(`WS send error: ${String(err)}`);
     }
   }
-  broadcastOutput(sessionId, lines) {
-    const msg = { type: "OUTPUT", sessionId, lines };
-    this._broadcastToSession(sessionId, msg);
+  sendError(ws, code, message) {
+    const msg = { type: "ERROR", code, message };
+    this.send(ws, msg);
   }
-  // ────────────────────────────────────────────
-  // Connection handling
-  // ────────────────────────────────────────────
-  _handleConnection(ws) {
-    const clientId = (0, import_uuid2.v4)();
-    const client = {
-      id: clientId,
-      name: "",
-      ws,
-      subscribedSessions: /* @__PURE__ */ new Set(),
-      isAuthenticated: false
-    };
-    this.clients.set(clientId, client);
-    logger_default.debug(`WS client connected: ${clientId}`);
-    ws.on("message", (raw) => {
-      const text = typeof raw === "string" ? raw : raw.toString("utf8");
-      let msg;
-      try {
-        msg = JSON.parse(text);
-      } catch {
-        logger_default.warn(`WS client ${clientId}: invalid JSON, closing`);
-        this._sendError(ws, "PARSE_ERROR", "Invalid JSON");
-        ws.close(1002, "Invalid JSON");
-        return;
+  broadcastAll(msg) {
+    const payload = JSON.stringify(msg);
+    for (const client of this.clients.values()) {
+      if (client.isAuthenticated && client.ws.readyState === import_ws.WebSocket.OPEN) {
+        try {
+          client.ws.send(payload);
+        } catch (err) {
+          logger_default.debug(`Broadcast error to ${client.id}: ${String(err)}`);
+        }
       }
-      this._handleMessage(client, msg);
-    });
-    ws.on("close", () => {
-      logger_default.debug(`WS client disconnected: ${client.id}`);
-      for (const sessionId of client.subscribedSessions) {
-        this.sessionManager.removeClientFromSession(sessionId, client.id);
-      }
-      this.pushService?.unregisterClient(client.id);
-      this.clients.delete(client.id);
-    });
-    ws.on("error", (err) => {
-      logger_default.warn(`WS client ${clientId} error: ${err.message}`);
-    });
-    const authTimeout = setTimeout(() => {
-      if (!client.isAuthenticated) {
-        logger_default.warn(`WS client ${clientId}: auth timeout, closing`);
-        ws.close(1008, "Auth timeout");
-      }
-    }, 1e4);
-    authTimeout.unref();
-    client.authTimeout = authTimeout;
+    }
   }
-  _handleMessage(client, msg) {
+  broadcastToSession(sessionId, msg) {
+    const payload = JSON.stringify(msg);
+    for (const client of this.clients.values()) {
+      if (client.isAuthenticated && client.subscribedSessions.has(sessionId) && client.ws.readyState === import_ws.WebSocket.OPEN) {
+        try {
+          client.ws.send(payload);
+        } catch (err) {
+          logger_default.debug(`Session broadcast error to ${client.id}: ${String(err)}`);
+        }
+      }
+    }
+  }
+};
+
+// src/message-router.ts
+var crypto2 = __toESM(require("crypto"));
+var os4 = __toESM(require("os"));
+var path6 = __toESM(require("path"));
+init_logger();
+var DAEMON_VERSION = package_default.version;
+var MAX_INPUT_LENGTH = 64 * 1024;
+var MessageRouter = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  deps;
+  /**
+   * Entry point invoked by ws-transport for every parsed JSON message.
+   */
+  dispatch(client, msg) {
     if (typeof msg !== "object" || msg === null || !("type" in msg)) {
-      this._sendError(client.ws, "INVALID_MESSAGE", "Missing type field");
+      this.deps.registry.sendError(client.ws, "INVALID_MESSAGE", "Missing type field");
       return;
     }
     const typed = msg;
     if (!this._validateMessage(typed)) {
-      this._sendError(client.ws, "INVALID_MESSAGE", "Invalid message fields");
+      this.deps.registry.sendError(client.ws, "INVALID_MESSAGE", "Invalid message fields");
       return;
     }
     if (!client.isAuthenticated) {
       if (typed.type !== "AUTH") {
-        this._sendError(client.ws, "NOT_AUTHENTICATED", "Send AUTH first");
+        this.deps.registry.sendError(client.ws, "NOT_AUTHENTICATED", "Send AUTH first");
         client.ws.close(1008, "Not authenticated");
         return;
       }
@@ -1769,14 +1690,12 @@ var WsServer = class _WsServer {
         void this._handleSpawnSession(client, typed);
         break;
       default:
-        this._sendError(client.ws, "UNKNOWN_TYPE", "Unknown message type");
+        this.deps.registry.sendError(client.ws, "UNKNOWN_TYPE", "Unknown message type");
     }
   }
   // ────────────────────────────────────────────
-  // Message validation
+  // Validation
   // ────────────────────────────────────────────
-  static MAX_INPUT_LENGTH = 64 * 1024;
-  // 64 KB max input
   _validateMessage(msg) {
     switch (msg.type) {
       case "AUTH":
@@ -1789,7 +1708,7 @@ var WsServer = class _WsServer {
       case "UNSUBSCRIBE":
         return typeof msg.sessionId === "string";
       case "INPUT":
-        return typeof msg.sessionId === "string" && typeof msg.data === "string" && msg.data.length <= _WsServer.MAX_INPUT_LENGTH;
+        return typeof msg.sessionId === "string" && typeof msg.data === "string" && msg.data.length <= MAX_INPUT_LENGTH;
       case "RESIZE":
         return typeof msg.sessionId === "string" && typeof msg.cols === "number" && Number.isInteger(msg.cols) && msg.cols > 0 && msg.cols <= 1e3 && typeof msg.rows === "number" && Number.isInteger(msg.rows) && msg.rows > 0 && msg.rows <= 500;
       case "REGISTER_PUSH_TOKEN":
@@ -1803,11 +1722,12 @@ var WsServer = class _WsServer {
     }
   }
   // ────────────────────────────────────────────
-  // Message handlers
+  // Handlers
   // ────────────────────────────────────────────
   _handleAuth(client, msg) {
+    const { config, registry } = this.deps;
     const secretBuf = Buffer.from(String(msg.secret));
-    const expectedBuf = Buffer.from(this.config.authSecret);
+    const expectedBuf = Buffer.from(config.authSecret);
     const isValid = secretBuf.length === expectedBuf.length && crypto2.timingSafeEqual(secretBuf, expectedBuf);
     if (!isValid) {
       logger_default.warn(`WS client ${client.id}: auth failed`);
@@ -1815,7 +1735,7 @@ var WsServer = class _WsServer {
         type: "AUTH_FAIL",
         reason: "Invalid secret"
       };
-      this._send(client.ws, fail);
+      registry.send(client.ws, fail);
       client.ws.close(1008, "Auth failed");
       return;
     }
@@ -1827,30 +1747,27 @@ var WsServer = class _WsServer {
     }
     const requested = msg.clientId;
     if (typeof requested === "string" && requested.length > 0 && requested.length <= 100 && !requested.includes("\0")) {
-      if (requested !== client.id) {
-        this.clients.delete(client.id);
-        client.id = requested;
-        this.clients.set(client.id, client);
-      }
+      registry.rebind(client, requested);
     }
     const ok = { type: "AUTH_OK", clientId: client.id, daemonVersion: DAEMON_VERSION };
-    this._send(client.ws, ok);
+    registry.send(client.ws, ok);
     logger_default.info(`WS client authenticated: ${client.id} (${client.name})`);
   }
   _handleListSessions(client) {
-    const sessions = this.sessionManager.getAllSessions().map((s) => s.info);
+    const sessions = this.deps.sessionManager.getAllSessions().map((s) => s.info);
     const msg = { type: "SESSIONS", sessions };
-    this._send(client.ws, msg);
+    this.deps.registry.send(client.ws, msg);
   }
   _handleSubscribe(client, msg) {
-    const session = this.sessionManager.getSession(msg.sessionId);
+    const { sessionManager, registry, config } = this.deps;
+    const session = sessionManager.getSession(msg.sessionId);
     if (!session) {
-      this._sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
+      registry.sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
       return;
     }
     client.subscribedSessions.add(msg.sessionId);
-    this.sessionManager.addClientToSession(msg.sessionId, client.id);
-    const historyCount = this.config.historyOnConnect;
+    sessionManager.addClientToSession(msg.sessionId, client.id);
+    const historyCount = config.historyOnConnect;
     const lines = msg.fromLine !== void 0 ? session.buffer.getLines(msg.fromLine) : session.buffer.getRecent(historyCount);
     const history = {
       type: "HISTORY",
@@ -1859,23 +1776,24 @@ var WsServer = class _WsServer {
       totalLines: session.buffer.totalLinesReceived,
       firstAvailableLine: session.buffer.firstAvailableLine()
     };
-    this._send(client.ws, history);
+    registry.send(client.ws, history);
     logger_default.debug(
       `Client ${client.id} subscribed to session ${msg.sessionId}, sent ${lines.length} history lines`
     );
   }
   _handleUnsubscribe(client, msg) {
     client.subscribedSessions.delete(msg.sessionId);
-    this.sessionManager.removeClientFromSession(msg.sessionId, client.id);
+    this.deps.sessionManager.removeClientFromSession(msg.sessionId, client.id);
     logger_default.debug(`Client ${client.id} unsubscribed from session ${msg.sessionId}`);
   }
   _handleInput(client, msg) {
-    const session = this.sessionManager.getSession(msg.sessionId);
+    const { sessionManager, registry } = this.deps;
+    const session = sessionManager.getSession(msg.sessionId);
     if (!session) {
-      this._sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
+      registry.sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
       return;
     }
-    const lock = this.inputLocks.get(msg.sessionId);
+    const lock = registry.getInputLock(msg.sessionId);
     if (lock && lock.expiresAt > Date.now() && lock.clientId !== client.id) {
       const lockMsg = {
         type: "INPUT_LOCK",
@@ -1884,10 +1802,10 @@ var WsServer = class _WsServer {
         lockedByClientName: lock.clientName,
         expiresAt: lock.expiresAt
       };
-      this._send(client.ws, lockMsg);
+      registry.send(client.ws, lockMsg);
       return;
     }
-    this.inputLocks.set(msg.sessionId, {
+    registry.setInputLock(msg.sessionId, {
       clientId: client.id,
       clientName: client.name,
       expiresAt: Date.now() + INPUT_LOCK_TTL_MS
@@ -1895,42 +1813,45 @@ var WsServer = class _WsServer {
     session.write(msg.data, client.id);
   }
   _handleResize(client, msg) {
-    const session = this.sessionManager.getSession(msg.sessionId);
+    const { sessionManager, registry } = this.deps;
+    const session = sessionManager.getSession(msg.sessionId);
     if (!session) {
-      this._sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
+      registry.sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
       return;
     }
     session.resize(msg.cols, msg.rows);
   }
   _handlePing(client) {
     const pong = { type: "PONG", timestamp: Date.now() };
-    this._send(client.ws, pong);
+    this.deps.registry.send(client.ws, pong);
   }
   _handleRegisterPushToken(client, msg) {
-    if (this.pushService) {
-      this.pushService.registerToken(client.id, msg.token, msg.platform);
+    if (this.deps.pushService) {
+      this.deps.pushService.registerToken(client.id, msg.token, msg.platform);
     }
   }
   _handleListDirectories(client, msg) {
+    const { sessionManager, directoryScanner, registry } = this.deps;
     const recentCwds = recentCwdsFromSessions(
-      this.sessionManager.getAllSessions().map((s) => s.info)
+      sessionManager.getAllSessions().map((s) => s.info)
     );
-    const directories = this.directoryScanner.scan({
+    const directories = directoryScanner.scan({
       recentCwds,
       query: msg.query
     });
     const reply = { type: "DIRECTORY_LIST", directories };
-    this._send(client.ws, reply);
+    registry.send(client.ws, reply);
   }
   async _handleSpawnSession(client, msg) {
-    const cwd = this.directoryScanner.resolveAndValidate(msg.cwd);
+    const { sessionManager, directoryScanner, registry, config } = this.deps;
+    const cwd = directoryScanner.resolveAndValidate(msg.cwd);
     if (!cwd) {
       const reply = {
         type: "SPAWN_RESULT",
         requestId: msg.requestId,
         error: `Directory not accessible: ${msg.cwd}`
       };
-      this._send(client.ws, reply);
+      registry.send(client.ws, reply);
       return;
     }
     const home = os4.homedir();
@@ -1944,12 +1865,12 @@ var WsServer = class _WsServer {
         requestId: msg.requestId,
         error: "cwd must be under your home directory"
       };
-      this._send(client.ws, reply);
+      registry.send(client.ws, reply);
       return;
     }
-    const cap = this.config.maxSpawnedSessions;
+    const cap = config.maxSpawnedSessions;
     if (cap > 0) {
-      const ownedCount = this.sessionManager.getAllSessions().filter((s) => s.info.owned).length;
+      const ownedCount = sessionManager.getAllSessions().filter((s) => s.info.owned).length;
       if (ownedCount >= cap) {
         logger_default.warn(
           `Rejected SPAWN_SESSION over cap: client=${client.id} owned=${ownedCount} cap=${cap}`
@@ -1959,18 +1880,18 @@ var WsServer = class _WsServer {
           requestId: msg.requestId,
           error: `Spawned-session cap reached (${cap}). Close an existing session and try again.`
         };
-        this._send(client.ws, reply);
+        registry.send(client.ws, reply);
         return;
       }
     }
     try {
-      const session = await this.sessionManager.spawnSession(cwd);
+      const session = await sessionManager.spawnSession(cwd);
       const reply = {
         type: "SPAWN_RESULT",
         requestId: msg.requestId,
         sessionId: session.id
       };
-      this._send(client.ws, reply);
+      registry.send(client.ws, reply);
       logger_default.info(
         `Spawn requested by ${client.id} (${client.name}) cwd=${cwd} \u2192 session ${session.id}`
       );
@@ -1982,47 +1903,225 @@ var WsServer = class _WsServer {
         requestId: msg.requestId,
         error: reason
       };
-      this._send(client.ws, reply);
+      registry.send(client.ws, reply);
     }
   }
-  // ────────────────────────────────────────────
-  // Sending helpers
-  // ────────────────────────────────────────────
-  _send(ws, msg) {
-    if (ws.readyState !== import_ws.WebSocket.OPEN) return;
-    try {
-      ws.send(JSON.stringify(msg));
-    } catch (err) {
-      logger_default.debug(`WS send error: ${String(err)}`);
-    }
+};
+
+// src/ws-transport.ts
+var http = __toESM(require("http"));
+var import_ws2 = require("ws");
+var import_uuid2 = require("uuid");
+init_logger();
+var MAX_PAYLOAD_BYTES = 1024 * 1024;
+var AUTH_TIMEOUT_MS = 1e4;
+var WsTransport = class {
+  constructor(config, bindAddress, registry, router) {
+    this.config = config;
+    this.bindAddress = bindAddress;
+    this.registry = registry;
+    this.router = router;
   }
-  _sendError(ws, code, message) {
-    const msg = { type: "ERROR", code, message };
-    this._send(ws, msg);
+  config;
+  bindAddress;
+  registry;
+  router;
+  httpServer = null;
+  wss = null;
+  async start() {
+    this.httpServer = http.createServer();
+    this.wss = new import_ws2.WebSocketServer({
+      server: this.httpServer,
+      maxPayload: MAX_PAYLOAD_BYTES
+    });
+    this.wss.on("connection", (ws) => {
+      this._handleConnection(ws);
+    });
+    await new Promise((resolve4, reject) => {
+      this.httpServer.listen(this.config.port, this.bindAddress, () => {
+        logger_default.info(
+          `WebSocket server listening on ws://${this.bindAddress}:${this.config.port}`
+        );
+        resolve4();
+      });
+      this.httpServer.once("error", reject);
+    });
   }
-  _broadcastAll(msg) {
-    const payload = JSON.stringify(msg);
-    for (const client of this.clients.values()) {
-      if (client.isAuthenticated && client.ws.readyState === import_ws.WebSocket.OPEN) {
-        try {
-          client.ws.send(payload);
-        } catch (err) {
-          logger_default.debug(`Broadcast error to ${client.id}: ${String(err)}`);
-        }
+  stop() {
+    this.wss?.close();
+    this.httpServer?.close();
+    logger_default.info("WebSocket server stopped");
+  }
+  // ────────────────────────────────────────────
+  // Per-connection lifecycle
+  // ────────────────────────────────────────────
+  _handleConnection(ws) {
+    const clientId = (0, import_uuid2.v4)();
+    const client = {
+      id: clientId,
+      name: "",
+      ws,
+      subscribedSessions: /* @__PURE__ */ new Set(),
+      isAuthenticated: false
+    };
+    this.registry.add(client);
+    logger_default.debug(`WS client connected: ${clientId}`);
+    ws.on("message", (raw) => {
+      const text = typeof raw === "string" ? raw : raw.toString("utf8");
+      let msg;
+      try {
+        msg = JSON.parse(text);
+      } catch {
+        logger_default.warn(`WS client ${clientId}: invalid JSON, closing`);
+        this.registry.sendError(ws, "PARSE_ERROR", "Invalid JSON");
+        ws.close(1002, "Invalid JSON");
+        return;
+      }
+      this.router.dispatch(client, msg);
+    });
+    ws.on("close", () => {
+      logger_default.debug(`WS client disconnected: ${client.id}`);
+      this.registry.remove(client);
+    });
+    ws.on("error", (err) => {
+      logger_default.warn(`WS client ${clientId} error: ${err.message}`);
+    });
+    const authTimeout = setTimeout(() => {
+      if (!client.isAuthenticated) {
+        logger_default.warn(`WS client ${clientId}: auth timeout, closing`);
+        ws.close(1008, "Auth timeout");
+      }
+    }, AUTH_TIMEOUT_MS);
+    authTimeout.unref();
+    client.authTimeout = authTimeout;
+  }
+};
+
+// src/notification-dispatcher.ts
+init_logger();
+var NotificationDispatcher = class {
+  constructor(sessionManager, registry, pushService) {
+    this.sessionManager = sessionManager;
+    this.registry = registry;
+    this.pushService = pushService;
+  }
+  sessionManager;
+  registry;
+  pushService;
+  /** Track sessions that already have a data listener wired to avoid duplicates. */
+  wiredSessions = /* @__PURE__ */ new Set();
+  /**
+   * Per-session pending OUTPUT line queue. Bursts of PTY data (which can
+   * arrive as 50-chunk bursts per visible block) are coalesced into a single
+   * OUTPUT broadcast per turn of the event loop.
+   */
+  pendingOutput = /* @__PURE__ */ new Map();
+  outputScheduled = /* @__PURE__ */ new Set();
+  start() {
+    this.sessionManager.on("session-added", (session) => {
+      this._onSessionAdded(session);
+    });
+    this.sessionManager.on("session-removed", (sessionId) => {
+      this._onSessionRemoved(sessionId);
+    });
+    this.sessionManager.on(
+      "session-updated",
+      (sessionId, changes) => {
+        this._onSessionUpdated(sessionId, changes);
+      }
+    );
+  }
+  // ────────────────────────────────────────────
+  // SessionManager event handlers
+  // ────────────────────────────────────────────
+  _onSessionAdded(session) {
+    const msg = { type: "SESSION_ADDED", session };
+    this.registry.broadcastAll(msg);
+    if (!this.wiredSessions.has(session.id)) {
+      const sessionObj = this.sessionManager.getSession(session.id);
+      if (sessionObj) {
+        this.wiredSessions.add(session.id);
+        const sessionId = session.id;
+        sessionObj.on("data", (lines) => {
+          if (lines.length === 0) return;
+          let queue = this.pendingOutput.get(sessionId);
+          if (!queue) {
+            queue = [];
+            this.pendingOutput.set(sessionId, queue);
+          }
+          for (const l of lines) queue.push(l);
+          if (!this.outputScheduled.has(sessionId)) {
+            this.outputScheduled.add(sessionId);
+            setImmediate(() => {
+              this.outputScheduled.delete(sessionId);
+              const batch = this.pendingOutput.get(sessionId);
+              this.pendingOutput.delete(sessionId);
+              if (!batch || batch.length === 0) return;
+              const out = {
+                type: "OUTPUT",
+                sessionId,
+                lines: batch
+              };
+              this.registry.broadcastToSession(sessionId, out);
+            });
+          }
+        });
       }
     }
   }
-  _broadcastToSession(sessionId, msg) {
-    const payload = JSON.stringify(msg);
-    for (const client of this.clients.values()) {
-      if (client.isAuthenticated && client.subscribedSessions.has(sessionId) && client.ws.readyState === import_ws.WebSocket.OPEN) {
-        try {
-          client.ws.send(payload);
-        } catch (err) {
-          logger_default.debug(`Session broadcast error to ${client.id}: ${String(err)}`);
-        }
-      }
+  _onSessionRemoved(sessionId) {
+    const msg = { type: "SESSION_REMOVED", sessionId };
+    this.registry.broadcastAll(msg);
+    this.wiredSessions.delete(sessionId);
+    this.pendingOutput.delete(sessionId);
+    this.outputScheduled.delete(sessionId);
+    this.registry.clearInputLock(sessionId);
+  }
+  _onSessionUpdated(sessionId, changes) {
+    const msg = { type: "SESSION_UPDATED", sessionId, changes };
+    this.registry.broadcastAll(msg);
+    if (changes.waitingForInput === true && this.pushService?.isEnabled) {
+      const session = this.sessionManager.getSession(sessionId);
+      const name = session?.info.name ?? "Claude";
+      this.pushService.sendToAll(
+        `${name} needs input`,
+        "Claude has finished its task and is waiting for your response.",
+        { sessionId }
+      ).catch((err) => {
+        logger_default.warn(`FCM push error: ${String(err)}`);
+      });
     }
+  }
+};
+
+// src/ws-server.ts
+var WsServer = class {
+  registry;
+  transport;
+  notifications;
+  constructor(sessionManager, config, bindAddress, pushService) {
+    this.registry = new ClientRegistry(sessionManager, pushService);
+    const directoryScanner = new DirectoryScanner();
+    const router = new MessageRouter({
+      sessionManager,
+      config,
+      registry: this.registry,
+      directoryScanner,
+      pushService
+    });
+    this.transport = new WsTransport(config, bindAddress, this.registry, router);
+    this.notifications = new NotificationDispatcher(
+      sessionManager,
+      this.registry,
+      pushService
+    );
+  }
+  async start() {
+    await this.transport.start();
+    this.notifications.start();
+  }
+  stop() {
+    this.transport.stop();
   }
 };
 
@@ -2482,9 +2581,9 @@ program.command("status").description("Show daemon status").action(async () => {
 });
 program.command("sessions").description("List active sessions as JSON (reads daemon state via WS)").action(async () => {
   const config = loadConfig();
-  const { WebSocket: WebSocket2 } = await import("ws");
+  const { WebSocket: WebSocket3 } = await import("ws");
   const bindAddr = process.env["WALCCY_DEV_MODE"] === "1" ? "127.0.0.1" : await getTailscaleIP() ?? "127.0.0.1";
-  const ws = new WebSocket2(`ws://${bindAddr}:${config.port}`);
+  const ws = new WebSocket3(`ws://${bindAddr}:${config.port}`);
   const timeout = setTimeout(() => {
     console.error("Connection timed out");
     ws.close();
