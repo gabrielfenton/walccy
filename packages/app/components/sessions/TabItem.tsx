@@ -8,7 +8,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { SessionStatusDot } from './SessionStatusDot';
-import type { Session } from '../../types';
+import type { Session } from '@walccy/protocol';
 
 // ── Types ─────────────────────────────────────
 
@@ -52,6 +52,16 @@ export const TabItem: React.FC<TabItemProps> = ({
         >
           {truncateName(session.name)}
         </Text>
+        {session.owned === false ? (
+          <View
+            style={[styles.roBadge, isActive ? styles.roBadgeActive : null]}
+            accessibilityLabel="Read-only session"
+          >
+            <Text style={[styles.roBadgeText, isActive ? styles.roBadgeTextActive : null]}>
+              RO
+            </Text>
+          </View>
+        ) : null}
       </View>
     </TouchableOpacity>
   );
@@ -95,5 +105,28 @@ const styles = StyleSheet.create({
 
   labelInactive: {
     color: Colors.textSecondary,
+  },
+
+  roBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+    backgroundColor: Colors.accentAmber + '22',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.accentAmber,
+  },
+  roBadgeActive: {
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderColor: 'rgba(255,255,255,0.45)',
+  },
+  roBadgeText: {
+    color: Colors.accentAmber,
+    fontFamily: FontFamily.ui,
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.5,
+  },
+  roBadgeTextActive: {
+    color: '#FFFFFF',
   },
 });

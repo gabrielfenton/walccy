@@ -18,7 +18,7 @@ import {
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { TabItem } from './TabItem';
-import type { Session } from '../../types';
+import type { Session } from '@walccy/protocol';
 
 // ── Types ─────────────────────────────────────
 

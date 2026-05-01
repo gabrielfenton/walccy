@@ -13,7 +13,7 @@ import type {
   ServerMessage,
   Session as SessionInfo,
   BufferedLine,
-} from './types.js';
+} from '@walccy/protocol';
 import logger from './logger.js';
 import pkg from '../package.json';
 
@@ -574,6 +574,27 @@ export class WsServer {
       };
       this._send(client.ws, reply);
       return;
+    }
+
+    // Concurrent-spawn cap.  Counts daemon-owned sessions only — externally
+    // discovered (read-only) sessions don't consume a spawn slot.
+    const cap = this.config.maxSpawnedSessions;
+    if (cap > 0) {
+      const ownedCount = this.sessionManager
+        .getAllSessions()
+        .filter((s) => s.info.owned).length;
+      if (ownedCount >= cap) {
+        logger.warn(
+          `Rejected SPAWN_SESSION over cap: client=${client.id} owned=${ownedCount} cap=${cap}`
+        );
+        const reply: ServerMessage = {
+          type: 'SPAWN_RESULT',
+          requestId: msg.requestId,
+          error: `Spawned-session cap reached (${cap}). Close an existing session and try again.`,
+        };
+        this._send(client.ws, reply);
+        return;
+      }
     }
 
     try {

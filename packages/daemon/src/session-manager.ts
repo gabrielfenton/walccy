@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import * as net from 'net';
 import * as path from 'path';
 import { Session } from './session.js';
-import type { Session as SessionInfo } from './types.js';
+import type { Session as SessionInfo } from '@walccy/protocol';
 import logger from './logger.js';
 
 // ──────────────────────────────────────────────

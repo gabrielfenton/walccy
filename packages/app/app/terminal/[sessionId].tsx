@@ -13,7 +13,7 @@ import {
   View,
   Vibration,
 } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useShallow } from 'zustand/react/shallow';
 import { useSessionsStore } from '../../stores/sessions.store';
 import { wsClient } from '../../services/ws-client';
@@ -25,12 +25,13 @@ import { InputBar } from '../../components/terminal/InputBar';
 import { InputLockBanner } from '../../components/terminal/InputLockBanner';
 import { ClipboardPopup } from '../../components/clipboard/ClipboardPopup';
 import { ClipboardBubble } from '../../components/clipboard/ClipboardBubble';
+import { ClipboardHistorySheet } from '../../components/clipboard/ClipboardHistorySheet';
 import { PromptLibrarySheet } from '../../components/prompt-library/PromptLibrarySheet';
 import { TextInputModal } from '../../components/ui/TextInputModal';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { useSettingsStore } from '../../stores/settings.store';
-import type { ServerMessage } from '../../types';
+import type { ServerMessage } from '@walccy/protocol';
 
 // ──────────────────────────────────────────────
 // Types
@@ -86,15 +87,52 @@ function WaitingBanner(): React.ReactElement {
 // Read-only banner (external sessions)
 // ──────────────────────────────────────────────
 
-function ReadOnlyBanner(): React.ReactElement {
+interface ReadOnlyBannerProps {
+  cwd: string;
+  onSpawnHere: () => void;
+  spawning: boolean;
+  spawnError: string | null;
+}
+
+function ReadOnlyBanner({
+  cwd,
+  onSpawnHere,
+  spawning,
+  spawnError,
+}: ReadOnlyBannerProps): React.ReactElement {
   return (
     <View style={styles.readOnlyBanner}>
-      <View style={styles.readOnlyBadge}>
-        <Text style={styles.readOnlyBadgeText}>READ-ONLY</Text>
+      <View style={styles.readOnlyTopRow}>
+        <View style={styles.readOnlyBadge}>
+          <Text style={styles.readOnlyBadgeText}>READ-ONLY</Text>
+        </View>
+        <Text style={styles.readOnlyText} numberOfLines={2}>
+          External session — input not available. Run{' '}
+          <Text style={styles.readOnlyCode}>walccy wrap claude</Text>{' '}
+          in that terminal, or spawn a wrapped session here.
+        </Text>
       </View>
-      <Text style={styles.readOnlyText} numberOfLines={2}>
-        External session — output and input not available. Spawn a session from the app for full control.
-      </Text>
+      <TouchableOpacity
+        style={[styles.readOnlySpawnButton, spawning ? styles.readOnlySpawnButtonDisabled : null]}
+        onPress={onSpawnHere}
+        disabled={spawning || !cwd}
+        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`Open new wrapped session at ${cwd}`}
+      >
+        <Text
+          style={styles.readOnlySpawnButtonText}
+          numberOfLines={1}
+          ellipsizeMode="middle"
+        >
+          {spawning ? 'Spawning…' : `Spawn wrapped session at ${cwd}`}
+        </Text>
+      </TouchableOpacity>
+      {spawnError ? (
+        <Text style={styles.readOnlySpawnError} numberOfLines={2}>
+          {spawnError}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -105,6 +143,7 @@ function ReadOnlyBanner(): React.ReactElement {
 
 export default function TerminalSessionScreen(): React.ReactElement {
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
+  const router = useRouter();
 
   const sessions = useSessionsStore((s) => s.sessions);
   const session = sessionId && sessionId !== 'no-session'
@@ -125,8 +164,11 @@ export default function TerminalSessionScreen(): React.ReactElement {
     clientName: '',
   });
 
+  const [spawningHere, setSpawningHere] = useState(false);
+  const [spawnError, setSpawnError] = useState<string | null>(null);
   const [showPromptLibrary, setShowPromptLibrary] = useState(false);
   const [showClipboard, setShowClipboard] = useState(false);
+  const [showClipboardHistory, setShowClipboardHistory] = useState(false);
   const [selectedText, setSelectedText] = useState('');
   const [clipboardContent, setClipboardContent] = useState('');
   const [showBubble, setShowBubble] = useState(false);
@@ -204,7 +246,9 @@ export default function TerminalSessionScreen(): React.ReactElement {
   }, []);
 
   const handleOpenClipboard = useCallback(() => {
-    setShowClipboard(true);
+    // Toolbar 📋 → clipboard history sheet (manage / paste any past entry).
+    // Terminal long-press still opens ClipboardPopup with selection actions.
+    setShowClipboardHistory(true);
   }, []);
 
   // ── Clipboard bubble paste ────────────────────
@@ -254,6 +298,23 @@ export default function TerminalSessionScreen(): React.ReactElement {
     [savePromptText]
   );
 
+  // ── Spawn wrapped session at this read-only session's cwd ─
+
+  const handleSpawnHere = useCallback(async () => {
+    if (!session || spawningHere) return;
+    setSpawningHere(true);
+    setSpawnError(null);
+    try {
+      const newId = await wsClient.spawnSession(session.cwd);
+      router.push(`/terminal/${newId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSpawnError(msg);
+    } finally {
+      setSpawningHere(false);
+    }
+  }, [session, spawningHere, router]);
+
   // ─────────────────────────────────────────────
 
   return (
@@ -268,7 +329,14 @@ export default function TerminalSessionScreen(): React.ReactElement {
       />
 
       {/* Read-only banner for external sessions */}
-      {isReadOnly && <ReadOnlyBanner />}
+      {isReadOnly && session && (
+        <ReadOnlyBanner
+          cwd={session.cwd}
+          onSpawnHere={handleSpawnHere}
+          spawning={spawningHere}
+          spawnError={spawnError}
+        />
+      )}
 
       {/* Main output area */}
       {showEmpty ? (
@@ -292,6 +360,10 @@ export default function TerminalSessionScreen(): React.ReactElement {
         isVisible={showBubble}
         onPaste={handleBubblePaste}
         onDismiss={handleBubbleDismiss}
+        onLongPress={() => {
+          clipboardService.hideBubble();
+          setShowClipboardHistory(true);
+        }}
       />
 
       {/* Control bar + input — both hidden for read-only external sessions */}
@@ -314,9 +386,16 @@ export default function TerminalSessionScreen(): React.ReactElement {
         isVisible={showClipboard}
         selectedText={selectedText}
         activeSessionId={sessionId ?? null}
-        allSessionIds={Object.keys(sessions)}
+        allSessionIds={Object.values(sessions).filter((s) => s.owned !== false).map((s) => s.id)}
         onClose={() => setShowClipboard(false)}
         onSaveToPromptLibrary={handleSaveToPromptLibrary}
+      />
+
+      {/* Clipboard history — opened from the toolbar 📋 button */}
+      <ClipboardHistorySheet
+        isVisible={showClipboardHistory}
+        onClose={() => setShowClipboardHistory(false)}
+        activeSessionId={sessionId ?? null}
       />
 
       {/* Prompt library sheet */}
@@ -435,14 +514,45 @@ const styles = StyleSheet.create({
   // ── Read-only banner ──────────────────────
 
   readOnlyBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
     gap: 8,
     backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     paddingHorizontal: 12,
     paddingVertical: 8,
+  },
+  readOnlyTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  readOnlyCode: {
+    fontFamily: FontFamily.mono,
+    color: Colors.textPrimary,
+  },
+  readOnlySpawnButton: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: Colors.accent,
+    maxWidth: '100%',
+  },
+  readOnlySpawnButtonDisabled: {
+    opacity: 0.6,
+  },
+  readOnlySpawnButtonText: {
+    color: '#FFFFFF',
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: '600',
+  },
+  readOnlySpawnError: {
+    color: Colors.accentRed,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    marginTop: 2,
   },
   readOnlyBadge: {
     paddingHorizontal: 8,

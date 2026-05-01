@@ -5,7 +5,7 @@ import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { IPty } from 'node-pty';
 import { LineBuffer } from './buffer.js';
-import type { Session as SessionInfo, SessionStatus, BufferedLine } from './types.js';
+import type { Session as SessionInfo, SessionStatus, BufferedLine } from '@walccy/protocol';
 import logger from './logger.js';
 
 // ──────────────────────────────────────────────

@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import logger from './logger.js';
-import type { DirectoryEntry, Session as SessionInfo } from './types.js';
+import type { DirectoryEntry, Session as SessionInfo } from '@walccy/protocol';
 
 // Common roots searched for git repositories. We probe each one and skip those
 // that don't exist; missing roots are not errors.

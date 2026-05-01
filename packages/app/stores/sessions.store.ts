@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { Session } from '../types';
+import { useOutputStore } from './output.store';
+import type { Session } from '@walccy/protocol';
 
 interface SessionsStore {
   sessions: Record<string, Session>;
@@ -34,7 +35,9 @@ export const useSessionsStore = create<SessionsStore>((set) => ({
       };
     }),
 
-  removeSession: (id) =>
+  removeSession: (id) => {
+    // Also clean up the output buffer for this session
+    useOutputStore.getState().clearBuffer(id);
     set((state) => {
       const next = { ...state.sessions };
       delete next[id];
@@ -42,7 +45,8 @@ export const useSessionsStore = create<SessionsStore>((set) => ({
         sessions: next,
         activeSessionId: state.activeSessionId === id ? null : state.activeSessionId,
       };
-    }),
+    });
+  },
 
   setSessions: (sessions) =>
     set({

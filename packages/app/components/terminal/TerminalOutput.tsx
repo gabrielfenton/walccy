@@ -19,7 +19,7 @@ import { useOutputStore } from '../../stores/output.store';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { TerminalLine } from './TerminalLine';
-import type { BufferedLine } from '../../types';
+import type { BufferedLine } from '@walccy/protocol';
 
 // ──────────────────────────────────────────────
 // Props

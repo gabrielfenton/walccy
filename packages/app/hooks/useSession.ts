@@ -5,7 +5,7 @@
 import { useSessionsStore } from '../stores/sessions.store';
 import { useOutputStore } from '../stores/output.store';
 import { wsClient } from '../services/ws-client';
-import type { Session, BufferedLine } from '../types';
+import type { Session, BufferedLine } from '@walccy/protocol';
 
 export interface OutputBuffer {
   lines: BufferedLine[];

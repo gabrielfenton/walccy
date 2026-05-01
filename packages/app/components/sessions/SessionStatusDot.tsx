@@ -15,7 +15,7 @@ import Animated, {
   cancelAnimation,
 } from 'react-native-reanimated';
 import { Colors } from '../../constants/colors';
-import type { SessionStatus } from '../../types';
+import type { SessionStatus } from '@walccy/protocol';
 
 // ── Types ─────────────────────────────────────
 

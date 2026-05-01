@@ -2,6 +2,7 @@
   "name": "walccy",
   "private": true,
   "workspaces": [
+    "packages/protocol",
     "packages/daemon",
     "packages/app"
   ],

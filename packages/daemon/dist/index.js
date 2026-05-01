@@ -577,6 +577,7 @@ var package_default = {
     test: "vitest run"
   },
   dependencies: {
+    "@walccy/protocol": "*",
     commander: "^12.1.0",
     "node-pty": "^1.0.0",
     "qrcode-terminal": "^0.12.0",
@@ -608,7 +609,8 @@ var DEFAULTS = {
   autoDetect: true,
   autoDetectInterval: 3e3,
   logLevel: "info",
-  sessionNameStrategy: "cwd-basename"
+  sessionNameStrategy: "cwd-basename",
+  maxSpawnedSessions: 8
 };
 function getConfigPath() {
   return path.join(os.homedir(), ".config", "walccy", "config.json");
@@ -1898,6 +1900,22 @@ var WsServer = class _WsServer {
       };
       this._send(client.ws, reply);
       return;
+    }
+    const cap = this.config.maxSpawnedSessions;
+    if (cap > 0) {
+      const ownedCount = this.sessionManager.getAllSessions().filter((s) => s.info.owned).length;
+      if (ownedCount >= cap) {
+        logger_default.warn(
+          `Rejected SPAWN_SESSION over cap: client=${client.id} owned=${ownedCount} cap=${cap}`
+        );
+        const reply = {
+          type: "SPAWN_RESULT",
+          requestId: msg.requestId,
+          error: `Spawned-session cap reached (${cap}). Close an existing session and try again.`
+        };
+        this._send(client.ws, reply);
+        return;
+      }
     }
     try {
       const session = await this.sessionManager.spawnSession(cwd);

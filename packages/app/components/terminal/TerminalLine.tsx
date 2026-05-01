@@ -8,7 +8,7 @@ import { StyleSheet, Text } from 'react-native';
 import { parseAnsi } from '../../services/ansi-parser';
 import { Colors } from '../../constants/colors';
 import { FontFamily } from '../../constants/typography';
-import type { BufferedLine } from '../../types';
+import type { BufferedLine } from '@walccy/protocol';
 import type { TextSpan } from '../../services/ansi-parser';
 
 // ──────────────────────────────────────────────

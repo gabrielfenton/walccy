@@ -9,12 +9,17 @@ import { sessionsStore } from '../stores/sessions.store';
 import { outputStore } from '../stores/output.store';
 import {
   WS_RECONNECT_DELAYS,
+  WS_RECONNECT_JITTER,
   PING_INTERVAL,
+  PING_TIMEOUT,
   AUTH_TIMEOUT,
 } from '../constants/config';
+import { networkStatus } from './network-status';
+import { foregroundService } from './foreground-service';
+import { settingsStore } from '../stores/settings.store';
 import { scheduleLocalNotification } from './notification.service';
 import { getPushToken } from './push-token';
-import type { ServerMessage, DirectoryEntry } from '../types';
+import type { ServerMessage, DirectoryEntry } from '@walccy/protocol';
 
 // ──────────────────────────────────────────────
 // Persistent client identity
@@ -97,6 +102,16 @@ class WsClient {
     this.currentSecret = secret;
     this.reconnectAttempt = 0;
 
+    // Start the Android foreground service so the OS keeps us alive
+    // while in the background. Skipped when the user has enabled
+    // low-power mode (cellular / metered networks). No-op on iOS or
+    // when the native module isn't installed yet.
+    if (!settingsStore.getState().lowPowerMode) {
+      foregroundService.start({ host, port }).catch((err) => {
+        console.warn('[WsClient] Foreground service start failed:', err);
+      });
+    }
+
     connectionStore.getState().setStatus('connecting');
     this.openSocket();
   }
@@ -114,6 +129,8 @@ class WsClient {
       this.ws.close();
       this.ws = null;
     }
+
+    foregroundService.stop().catch(() => {});
 
     connectionStore.getState().setDisconnected();
   }
@@ -143,6 +160,19 @@ class WsClient {
   /** Request the full session list from the daemon */
   listSessions(): void {
     this.send({ type: 'LIST_SESSIONS' });
+  }
+
+  /**
+   * Sync the foreground-service state with the user's low-power-mode toggle.
+   * Call this when the toggle flips so the change takes effect without
+   * needing to disconnect/reconnect.
+   */
+  applyLowPowerMode(lowPowerMode: boolean): void {
+    if (lowPowerMode) {
+      foregroundService.stop().catch(() => {});
+    } else if (this.currentHost && this.currentPort) {
+      foregroundService.start({ host: this.currentHost, port: this.currentPort }).catch(() => {});
+    }
   }
 
   /**
@@ -269,12 +299,20 @@ class WsClient {
         this.startPing();
         // Immediately fetch session list
         this.listSessions();
-        // Re-subscribe to any sessions from a previous connection
-        for (const [sessionId, fromLine] of Array.from(this.activeSubscriptions.entries())) {
+        // Re-subscribe to any sessions from a previous connection.
+        // Resume from the highest line index we've already received so the
+        // daemon only ships the gap — critical on flaky connections that
+        // drop and reconnect mid-session.
+        const buffers = outputStore.getState().buffers;
+        for (const sessionId of Array.from(this.activeSubscriptions.keys())) {
+          const buf = buffers[sessionId];
+          const resumeFromLine = buf?.totalLines ?? this.activeSubscriptions.get(sessionId);
+          // Update our cached cursor so a future reconnect resumes correctly.
+          this.activeSubscriptions.set(sessionId, resumeFromLine);
           this.send({
             type: 'SUBSCRIBE',
             sessionId,
-            ...(fromLine !== undefined ? { fromLine } : {}),
+            ...(resumeFromLine !== undefined ? { fromLine: resumeFromLine } : {}),
           });
         }
         // Register push token for FCM notifications
@@ -391,8 +429,24 @@ class WsClient {
   private reconnect(): void {
     if (!this.currentHost || !this.currentPort || !this.currentSecret) return;
 
+    // Don't burn battery and data spamming retries when the OS knows
+    // we have no network. Park here and let the NetInfo listener kick
+    // us back into action when the link returns.
+    if (!networkStatus.isOnline()) {
+      connectionStore.getState().setStatus('connecting');
+      networkStatus.onceOnline(() => {
+        // Reset attempt count so the first try after reconnect is fast.
+        this.reconnectAttempt = 0;
+        this.openSocket();
+      });
+      return;
+    }
+
     const delays = WS_RECONNECT_DELAYS;
-    const delay = delays[Math.min(this.reconnectAttempt, delays.length - 1)] ?? delays[delays.length - 1]!;
+    const base = delays[Math.min(this.reconnectAttempt, delays.length - 1)] ?? delays[delays.length - 1]!;
+    // Symmetric jitter: ±WS_RECONNECT_JITTER (e.g. ±25%) of the base delay.
+    const jitter = base * WS_RECONNECT_JITTER * (Math.random() * 2 - 1);
+    const delay = Math.max(500, Math.round(base + jitter));
     this.reconnectAttempt++;
 
     connectionStore.getState().setStatus('connecting');
@@ -455,7 +509,8 @@ class WsClient {
       this.pingSentAt = Date.now();
       this.send({ type: 'PING' });
 
-      // If no PONG arrives within 5 seconds, treat as disconnected
+      // If no PONG arrives within PING_TIMEOUT, treat as disconnected.
+      // The longer window (15s) avoids spurious drops on jittery cellular.
       this.pingTimeout = setTimeout(() => {
         console.warn('[WsClient] Ping timeout — treating as disconnected');
         if (this.ws) {
@@ -467,7 +522,7 @@ class WsClient {
         this.stopPing();
         connectionStore.getState().setDisconnected('Ping timeout');
         this.reconnect();
-      }, 5000);
+      }, PING_TIMEOUT);
     }, PING_INTERVAL);
   }
 

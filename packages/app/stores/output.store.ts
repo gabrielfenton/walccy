@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { BufferedLine } from '../types';
+import type { BufferedLine } from '@walccy/protocol';
 
 const MAX_LINES_PER_BUFFER = 2000;
 
