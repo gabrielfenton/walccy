@@ -737,6 +737,16 @@ var LineBuffer = class {
   get totalLinesReceived() {
     return this.totalReceived;
   }
+  /**
+   * Index of the oldest line still present in the ring buffer, or 0 if empty.
+   * Used by clients to detect scrollback truncation on reconnect — if this
+   * exceeds the `fromLine` they requested, the gap was lost to ring wrap-around.
+   */
+  firstAvailableLine() {
+    if (this.count === 0) return 0;
+    const start = (this.head - this.count + this.maxLines) % this.maxLines;
+    return this.ring[start].index;
+  }
   get size() {
     return this.count;
   }
@@ -765,14 +775,8 @@ var Session = class _Session extends import_events.EventEmitter {
   id;
   /** The original detected PID (or 0 for daemon-spawned sessions). */
   pid;
-  /** node-pty instance — only set for sessions we own. */
-  pty = null;
-  /** Read-stream used to monitor external processes. */
-  monitorStream = null;
-  /** Wrapper-CLI socket — set when this session is fed by `walccy wrap`. */
-  wrapperSocket = null;
-  /** Whether we own the PTY (can accept writes). */
-  owned = false;
+  /** Current runtime mode (null = pre-init / post-kill). */
+  mode = null;
   buffer;
   _info;
   /** Accumulates partial lines between data events. */
@@ -803,6 +807,11 @@ var Session = class _Session extends import_events.EventEmitter {
   // ────────────────────────────────────────────
   // Public API
   // ────────────────────────────────────────────
+  /** True when the daemon (or wrapper CLI) accepts writes for this session. */
+  get owned() {
+    const k = this.mode?.kind;
+    return k === "spawn" || k === "wrap";
+  }
   get info() {
     return { ...this._info, lineCount: this.buffer.size };
   }
@@ -820,8 +829,7 @@ var Session = class _Session extends import_events.EventEmitter {
    * purposes — the read-only banner won't show.
    */
   attachWrapper(socket) {
-    this.wrapperSocket = socket;
-    this.owned = true;
+    this.mode = { kind: "wrap", socket };
     this._info.owned = true;
     this._info.status = "active";
   }
@@ -834,25 +842,26 @@ var Session = class _Session extends import_events.EventEmitter {
    * The daemon owns this PTY and can send input.
    */
   async spawn(cols = 220, rows = 50) {
-    if (this.pty) return;
+    if (this.mode) return;
     const pty = require("node-pty");
-    this.pty = pty.spawn("claude", [], {
+    const ptyProc = pty.spawn("claude", [], {
       name: "xterm-256color",
       cols,
       rows,
       cwd: this._info.cwd,
       env: this._sanitizedEnv()
     });
-    this.owned = true;
+    this.mode = { kind: "spawn", pty: ptyProc };
     this._info.owned = true;
     this._info.status = "active";
-    this.pty.onData((data) => {
+    ptyProc.onData((data) => {
       this._handleRawData(data, "stdout");
     });
-    this.pty.onExit(() => {
+    ptyProc.onExit(() => {
       this._info.status = "ended";
-      this.pty = null;
-      this.owned = false;
+      if (this.mode?.kind === "spawn" && this.mode.pty === ptyProc) {
+        this.mode = null;
+      }
       this._info.owned = false;
       this.emit("exit");
     });
@@ -868,7 +877,7 @@ var Session = class _Session extends import_events.EventEmitter {
    * daemon-spawned sessions (where we own the PTY master).
    */
   async attach() {
-    if (this.pty || this.monitorStream) return;
+    if (this.mode) return;
     const fdPath = `/proc/${this.pid}/fd/1`;
     try {
       fs3.accessSync(fdPath, fs3.constants.R_OK);
@@ -877,6 +886,7 @@ var Session = class _Session extends import_events.EventEmitter {
         logger_default.warn(
           `Session ${this.id}: fd/1 points to ${realPath} (TTY) \u2014 skipping output monitor to avoid stealing terminal input`
         );
+        this.mode = { kind: "attach", stream: null };
         this._info.status = "active";
         this._startExitWatcher();
         return;
@@ -885,30 +895,37 @@ var Session = class _Session extends import_events.EventEmitter {
       logger_default.warn(
         `Session ${this.id}: cannot read ${fdPath} \u2014 monitoring as external-only`
       );
+      this.mode = { kind: "attach", stream: null };
       this._info.status = "active";
       this._startExitWatcher();
       return;
     }
     try {
-      this.monitorStream = fs3.createReadStream(fdPath, {
+      const stream = fs3.createReadStream(fdPath, {
         encoding: "utf8",
         autoClose: true
       });
+      this.mode = { kind: "attach", stream };
       this._info.status = "active";
-      this.monitorStream.on("data", (chunk) => {
+      stream.on("data", (chunk) => {
         const data = typeof chunk === "string" ? chunk : chunk.toString("utf8");
         this._handleRawData(data, "stdout");
       });
-      this.monitorStream.on("error", (err) => {
+      stream.on("error", (err) => {
         logger_default.debug(`Session ${this.id} monitor stream error: ${err.message}`);
-        this.monitorStream = null;
+        if (this.mode?.kind === "attach") {
+          this.mode = { kind: "attach", stream: null };
+        }
       });
-      this.monitorStream.on("close", () => {
+      stream.on("close", () => {
         logger_default.debug(`Session ${this.id} monitor stream closed`);
-        this.monitorStream = null;
+        if (this.mode?.kind === "attach") {
+          this.mode = { kind: "attach", stream: null };
+        }
       });
     } catch (err) {
       logger_default.debug(`Session ${this.id}: failed to open ${fdPath}: ${String(err)}`);
+      this.mode = { kind: "attach", stream: null };
       this._info.status = "active";
     }
     this._startExitWatcher();
@@ -917,10 +934,11 @@ var Session = class _Session extends import_events.EventEmitter {
   // 64 KB
   /**
    * Send input to the owned PTY.
-   * No-ops for external sessions (read-only).
+   * No-ops for external (attach) sessions (read-only).
    */
   write(data, clientId) {
-    if (!this.owned || !this.pty && !this.wrapperSocket) {
+    const mode = this.mode;
+    if (!mode || mode.kind === "attach") {
       logger_default.warn(
         `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? "unknown"})`
       );
@@ -933,28 +951,46 @@ var Session = class _Session extends import_events.EventEmitter {
       data = data.slice(0, _Session.MAX_INPUT_LENGTH);
     }
     this._info.lastActivityAt = Date.now();
-    if (this.wrapperSocket) {
-      this.wrapperSocket.write(
-        JSON.stringify({
-          type: "INPUT",
-          data: Buffer.from(data, "utf8").toString("base64")
-        }) + "\n"
-      );
-      return;
+    switch (mode.kind) {
+      case "wrap":
+        mode.socket.write(
+          JSON.stringify({
+            type: "INPUT",
+            data: Buffer.from(data, "utf8").toString("base64")
+          }) + "\n"
+        );
+        return;
+      case "spawn":
+        void clientId;
+        mode.pty.write(data);
+        return;
+      default: {
+        const _exhaustive = mode;
+        void _exhaustive;
+        return;
+      }
     }
-    void clientId;
-    this.pty.write(data);
-    return;
   }
   resize(cols, rows) {
-    if (this.wrapperSocket) {
-      this.wrapperSocket.write(
-        JSON.stringify({ type: "RESIZE", cols, rows }) + "\n"
-      );
-      return;
+    const mode = this.mode;
+    if (!mode) return;
+    switch (mode.kind) {
+      case "wrap":
+        mode.socket.write(
+          JSON.stringify({ type: "RESIZE", cols, rows }) + "\n"
+        );
+        return;
+      case "spawn":
+        mode.pty.resize(cols, rows);
+        return;
+      case "attach":
+        return;
+      default: {
+        const _exhaustive = mode;
+        void _exhaustive;
+        return;
+      }
     }
-    if (!this.owned || !this.pty) return;
-    this.pty.resize(cols, rows);
   }
   kill() {
     if (this._idleTimer) {
@@ -965,23 +1001,32 @@ var Session = class _Session extends import_events.EventEmitter {
       clearInterval(this._exitWatcher);
       this._exitWatcher = null;
     }
-    if (this.pty) {
-      try {
-        this.pty.kill();
-      } catch {
-      }
-      this.pty = null;
-    }
-    if (this.monitorStream) {
-      this.monitorStream.destroy();
-      this.monitorStream = null;
-    }
-    if (this.wrapperSocket) {
-      const sock = this.wrapperSocket;
-      this.wrapperSocket = null;
-      try {
-        sock.destroy();
-      } catch {
+    const mode = this.mode;
+    this.mode = null;
+    this._info.owned = false;
+    if (mode) {
+      switch (mode.kind) {
+        case "spawn":
+          try {
+            mode.pty.kill();
+          } catch {
+          }
+          break;
+        case "attach":
+          if (mode.stream) {
+            mode.stream.destroy();
+          }
+          break;
+        case "wrap":
+          try {
+            mode.socket.destroy();
+          } catch {
+          }
+          break;
+        default: {
+          const _exhaustive = mode;
+          void _exhaustive;
+        }
       }
     }
     this._info.status = "ended";
@@ -1811,7 +1856,8 @@ var WsServer = class _WsServer {
       type: "HISTORY",
       sessionId: msg.sessionId,
       lines,
-      totalLines: session.buffer.totalLinesReceived
+      totalLines: session.buffer.totalLinesReceived,
+      firstAvailableLine: session.buffer.firstAvailableLine()
     };
     this._send(client.ws, history);
     logger_default.debug(

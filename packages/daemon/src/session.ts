@@ -1,12 +1,33 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
-import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { IPty } from 'node-pty';
 import { LineBuffer } from './buffer.js';
 import type { Session as SessionInfo, SessionStatus, BufferedLine } from '@walccy/protocol';
 import logger from './logger.js';
+
+// ──────────────────────────────────────────────
+// Session mode (tagged union)
+// ──────────────────────────────────────────────
+//
+// The runtime mode of a Session is represented as a discriminated union so
+// every I/O method can switch on `mode.kind` and TypeScript will check
+// exhaustiveness.  `null` means pre-init (constructed but not yet
+// spawned/attached/wrapped) or post-kill.
+//
+//   spawn  — daemon owns a node-pty PTY (writable).
+//   attach — read-only monitor on /proc/{pid}/fd/1; `stream` is null when fd
+//            is a TTY (we skip the read stream to avoid stealing terminal
+//            input) and the session is exit-watcher only.
+//   wrap   — fed by `walccy wrap`; bidirectional via a unix socket, treated
+//            as `owned` for UI purposes even though the PTY is on the
+//            wrapper side.
+//
+type SessionMode =
+  | { kind: 'spawn'; pty: IPty }
+  | { kind: 'attach'; stream: fs.ReadStream | null }
+  | { kind: 'wrap'; socket: net.Socket };
 
 // ──────────────────────────────────────────────
 // Typed event emitter interface
@@ -25,14 +46,9 @@ export class Session extends EventEmitter {
   readonly id: string;
   /** The original detected PID (or 0 for daemon-spawned sessions). */
   readonly pid: number;
-  /** node-pty instance — only set for sessions we own. */
-  private pty: IPty | null = null;
-  /** Read-stream used to monitor external processes. */
-  private monitorStream: fs.ReadStream | null = null;
-  /** Wrapper-CLI socket — set when this session is fed by `walccy wrap`. */
-  private wrapperSocket: net.Socket | null = null;
-  /** Whether we own the PTY (can accept writes). */
-  private owned: boolean = false;
+
+  /** Current runtime mode (null = pre-init / post-kill). */
+  private mode: SessionMode | null = null;
 
   readonly buffer: LineBuffer;
   private _info: SessionInfo;
@@ -68,6 +84,12 @@ export class Session extends EventEmitter {
   // Public API
   // ────────────────────────────────────────────
 
+  /** True when the daemon (or wrapper CLI) accepts writes for this session. */
+  get owned(): boolean {
+    const k = this.mode?.kind;
+    return k === 'spawn' || k === 'wrap';
+  }
+
   get info(): SessionInfo {
     return { ...this._info, lineCount: this.buffer.size };
   }
@@ -88,8 +110,7 @@ export class Session extends EventEmitter {
    * purposes — the read-only banner won't show.
    */
   attachWrapper(socket: net.Socket): void {
-    this.wrapperSocket = socket;
-    this.owned = true;
+    this.mode = { kind: 'wrap', socket };
     this._info.owned = true;
     this._info.status = 'active';
   }
@@ -104,13 +125,13 @@ export class Session extends EventEmitter {
    * The daemon owns this PTY and can send input.
    */
   async spawn(cols = 220, rows = 50): Promise<void> {
-    if (this.pty) return;
+    if (this.mode) return;
 
     // Lazy-load node-pty so the module can be tested without a native binding
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pty = require('node-pty') as typeof import('node-pty');
 
-    this.pty = pty.spawn('claude', [], {
+    const ptyProc = pty.spawn('claude', [], {
       name: 'xterm-256color',
       cols,
       rows,
@@ -118,18 +139,21 @@ export class Session extends EventEmitter {
       env: this._sanitizedEnv(),
     });
 
-    this.owned = true;
+    this.mode = { kind: 'spawn', pty: ptyProc };
     this._info.owned = true;
     this._info.status = 'active';
 
-    this.pty.onData((data: string) => {
+    ptyProc.onData((data: string) => {
       this._handleRawData(data, 'stdout');
     });
 
-    this.pty.onExit(() => {
+    ptyProc.onExit(() => {
       this._info.status = 'ended';
-      this.pty = null;
-      this.owned = false;
+      // Only clear if we're still in spawn mode for this same pty — kill()
+      // may have already transitioned us to null.
+      if (this.mode?.kind === 'spawn' && this.mode.pty === ptyProc) {
+        this.mode = null;
+      }
       this._info.owned = false;
       this.emit('exit');
     });
@@ -146,7 +170,7 @@ export class Session extends EventEmitter {
    * daemon-spawned sessions (where we own the PTY master).
    */
   async attach(): Promise<void> {
-    if (this.pty || this.monitorStream) return;
+    if (this.mode) return;
 
     const fdPath = `/proc/${this.pid}/fd/1`;
 
@@ -161,6 +185,7 @@ export class Session extends EventEmitter {
         logger.warn(
           `Session ${this.id}: fd/1 points to ${realPath} (TTY) — skipping output monitor to avoid stealing terminal input`
         );
+        this.mode = { kind: 'attach', stream: null };
         this._info.status = 'active';
         this._startExitWatcher();
         return;
@@ -169,35 +194,42 @@ export class Session extends EventEmitter {
       logger.warn(
         `Session ${this.id}: cannot read ${fdPath} — monitoring as external-only`
       );
+      this.mode = { kind: 'attach', stream: null };
       this._info.status = 'active';
       this._startExitWatcher();
       return;
     }
 
     try {
-      this.monitorStream = fs.createReadStream(fdPath, {
+      const stream = fs.createReadStream(fdPath, {
         encoding: 'utf8',
         autoClose: true,
       });
 
+      this.mode = { kind: 'attach', stream };
       this._info.status = 'active';
 
-      this.monitorStream.on('data', (chunk: string | Buffer) => {
+      stream.on('data', (chunk: string | Buffer) => {
         const data = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
         this._handleRawData(data, 'stdout');
       });
 
-      this.monitorStream.on('error', (err) => {
+      stream.on('error', (err) => {
         logger.debug(`Session ${this.id} monitor stream error: ${err.message}`);
-        this.monitorStream = null;
+        if (this.mode?.kind === 'attach') {
+          this.mode = { kind: 'attach', stream: null };
+        }
       });
 
-      this.monitorStream.on('close', () => {
+      stream.on('close', () => {
         logger.debug(`Session ${this.id} monitor stream closed`);
-        this.monitorStream = null;
+        if (this.mode?.kind === 'attach') {
+          this.mode = { kind: 'attach', stream: null };
+        }
       });
     } catch (err) {
       logger.debug(`Session ${this.id}: failed to open ${fdPath}: ${String(err)}`);
+      this.mode = { kind: 'attach', stream: null };
       this._info.status = 'active';
     }
 
@@ -208,10 +240,11 @@ export class Session extends EventEmitter {
 
   /**
    * Send input to the owned PTY.
-   * No-ops for external sessions (read-only).
+   * No-ops for external (attach) sessions (read-only).
    */
   write(data: string, clientId?: string): void {
-    if (!this.owned || (!this.pty && !this.wrapperSocket)) {
+    const mode = this.mode;
+    if (!mode || mode.kind === 'attach') {
       logger.warn(
         `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? 'unknown'})`
       );
@@ -231,30 +264,49 @@ export class Session extends EventEmitter {
     // don't synthesize an input-source line.  Skipping this also prevents
     // "(local) input line" + "(remote echo) stdout line" duplication in
     // mobile scrollback for any cooked-mode child (bash, sh).
-    if (this.wrapperSocket) {
-      this.wrapperSocket.write(
-        JSON.stringify({
-          type: 'INPUT',
-          data: Buffer.from(data, 'utf8').toString('base64'),
-        }) + '\n'
-      );
-      return;
+    switch (mode.kind) {
+      case 'wrap':
+        mode.socket.write(
+          JSON.stringify({
+            type: 'INPUT',
+            data: Buffer.from(data, 'utf8').toString('base64'),
+          }) + '\n'
+        );
+        return;
+      case 'spawn':
+        void clientId;
+        mode.pty.write(data);
+        return;
+      default: {
+        // Exhaustiveness guard
+        const _exhaustive: never = mode;
+        void _exhaustive;
+        return;
+      }
     }
-
-    void clientId;
-    this.pty!.write(data);
-    return;
   }
 
   resize(cols: number, rows: number): void {
-    if (this.wrapperSocket) {
-      this.wrapperSocket.write(
-        JSON.stringify({ type: 'RESIZE', cols, rows }) + '\n'
-      );
-      return;
+    const mode = this.mode;
+    if (!mode) return;
+    switch (mode.kind) {
+      case 'wrap':
+        mode.socket.write(
+          JSON.stringify({ type: 'RESIZE', cols, rows }) + '\n'
+        );
+        return;
+      case 'spawn':
+        mode.pty.resize(cols, rows);
+        return;
+      case 'attach':
+        // read-only — no resize
+        return;
+      default: {
+        const _exhaustive: never = mode;
+        void _exhaustive;
+        return;
+      }
     }
-    if (!this.owned || !this.pty) return;
-    this.pty.resize(cols, rows);
   }
 
   kill(): void {
@@ -268,27 +320,38 @@ export class Session extends EventEmitter {
       this._exitWatcher = null;
     }
 
-    if (this.pty) {
-      try {
-        this.pty.kill();
-      } catch {
-        // already dead
-      }
-      this.pty = null;
-    }
+    // Snapshot then clear `mode` BEFORE destroying the underlying resource —
+    // socket.destroy() / pty.kill() can synchronously re-enter via 'close'
+    // handlers, and we want those handlers to see a null mode.
+    const mode = this.mode;
+    this.mode = null;
+    this._info.owned = false;
 
-    if (this.monitorStream) {
-      this.monitorStream.destroy();
-      this.monitorStream = null;
-    }
-
-    if (this.wrapperSocket) {
-      const sock = this.wrapperSocket;
-      this.wrapperSocket = null;
-      try {
-        sock.destroy();
-      } catch {
-        // already closed
+    if (mode) {
+      switch (mode.kind) {
+        case 'spawn':
+          try {
+            mode.pty.kill();
+          } catch {
+            // already dead
+          }
+          break;
+        case 'attach':
+          if (mode.stream) {
+            mode.stream.destroy();
+          }
+          break;
+        case 'wrap':
+          try {
+            mode.socket.destroy();
+          } catch {
+            // already closed
+          }
+          break;
+        default: {
+          const _exhaustive: never = mode;
+          void _exhaustive;
+        }
       }
     }
 
