@@ -16,6 +16,14 @@ interface OutputStore {
   appendLines: (sessionId: string, lines: BufferedLine[]) => void;
   clearBuffer: (sessionId: string) => void;
   setLoadingHistory: (sessionId: string, loading: boolean) => void;
+  /**
+   * Prepend a synthetic line to the visible scrollback indicating that
+   * `droppedCount` lines were lost to ring-buffer wrap-around between the
+   * client's last-seen index and `atIndex` (the daemon's first-available
+   * line). The marker is rendered as ordinary stdout so existing line
+   * components style it correctly without protocol/UI churn.
+   */
+  insertGapMarker: (sessionId: string, droppedCount: number, atIndex: number) => void;
 }
 
 function emptyBuffer(): OutputBuffer {
@@ -89,6 +97,37 @@ export const useOutputStore = create<OutputStore>((set) => ({
         [sessionId]: emptyBuffer(),
       },
     })),
+
+  insertGapMarker: (sessionId, droppedCount, atIndex) =>
+    set((state) => {
+      const existing = state.buffers[sessionId] ?? emptyBuffer();
+      const text = `── scrollback truncated: ${droppedCount} line${droppedCount === 1 ? '' : 's'} lost ──`;
+      // Use a fractional index just below `atIndex` so the marker sorts
+      // before the contiguous tail and produces a unique FlashList key
+      // (item.index.toString() won't collide with any integer line index).
+      // Subtract a small jitter so repeated gap insertions for the same
+      // atIndex still produce unique keys instead of overwriting each other.
+      const marker: BufferedLine = {
+        index: atIndex - 0.5 - Math.random() * 0.25,
+        content: text,
+        rawContent: text,
+        timestamp: Date.now(),
+        source: 'stdout',
+      };
+      const next = [marker, ...existing.lines];
+      const trimmed = next.length > MAX_LINES_PER_BUFFER
+        ? next.slice(next.length - MAX_LINES_PER_BUFFER)
+        : next;
+      return {
+        buffers: {
+          ...state.buffers,
+          [sessionId]: {
+            ...existing,
+            lines: trimmed,
+          },
+        },
+      };
+    }),
 
   setLoadingHistory: (sessionId, loading) =>
     set((state) => {

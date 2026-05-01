@@ -366,6 +366,18 @@ class WsClient {
 
       case 'HISTORY': {
         outputStore.getState().setHistory(msg.sessionId, msg.lines, msg.totalLines);
+        // Detect scrollback truncation: if the daemon's oldest available
+        // line is past the cursor we asked to resume from, the ring buffer
+        // wrapped while we were disconnected. Surface the gap to the user.
+        const requestedFrom = this.activeSubscriptions.get(msg.sessionId);
+        if (
+          typeof requestedFrom === 'number' &&
+          requestedFrom > 0 &&
+          msg.firstAvailableLine > requestedFrom
+        ) {
+          const dropped = msg.firstAvailableLine - requestedFrom;
+          outputStore.getState().insertGapMarker(msg.sessionId, dropped, msg.firstAvailableLine);
+        }
         break;
       }
 

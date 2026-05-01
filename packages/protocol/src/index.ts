@@ -143,6 +143,19 @@ export interface HistoryMessage {
   sessionId: string;
   lines: BufferedLine[];
   totalLines: number;
+  /**
+   * Lowest line index still present in the daemon's ring buffer for this
+   * session at the moment of the response. Clients compare this against the
+   * `fromLine` they requested to detect scrollback truncation:
+   *  - `firstAvailableLine <= fromLine` → no gap; all requested lines were
+   *    available and have been delivered.
+   *  - `firstAvailableLine >  fromLine` → the buffer wrapped past the
+   *    requested cursor while the client was disconnected; exactly
+   *    `firstAvailableLine - fromLine` lines were dropped between the
+   *    requested point and the contiguous tail returned in `lines`.
+   * For empty buffers this is 0.
+   */
+  firstAvailableLine: number;
 }
 
 export interface OutputMessage {

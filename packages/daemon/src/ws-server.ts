@@ -451,6 +451,7 @@ export class WsServer {
       sessionId: msg.sessionId,
       lines,
       totalLines: session.buffer.totalLinesReceived,
+      firstAvailableLine: session.buffer.firstAvailableLine(),
     };
     this._send(client.ws, history);
 

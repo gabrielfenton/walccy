@@ -97,6 +97,17 @@ export class LineBuffer {
     return this.totalReceived;
   }
 
+  /**
+   * Index of the oldest line still present in the ring buffer, or 0 if empty.
+   * Used by clients to detect scrollback truncation on reconnect — if this
+   * exceeds the `fromLine` they requested, the gap was lost to ring wrap-around.
+   */
+  firstAvailableLine(): number {
+    if (this.count === 0) return 0;
+    const start = (this.head - this.count + this.maxLines) % this.maxLines;
+    return this.ring[start]!.index;
+  }
+
   get size(): number {
     return this.count;
   }
