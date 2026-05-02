@@ -97,16 +97,16 @@ var init_logger = __esm({
 
 // src/wrap-server.ts
 function getWrapSocketPath() {
-  return path7.join(os5.homedir(), ".walccy", "wrap.sock");
+  return path6.join(os4.homedir(), ".walccy", "wrap.sock");
 }
-var fs5, net, os5, path7, WrapServer;
+var fs5, net, os4, path6, WrapServer;
 var init_wrap_server = __esm({
   "src/wrap-server.ts"() {
     "use strict";
     fs5 = __toESM(require("fs"));
     net = __toESM(require("net"));
-    os5 = __toESM(require("os"));
-    path7 = __toESM(require("path"));
+    os4 = __toESM(require("os"));
+    path6 = __toESM(require("path"));
     init_logger();
     WrapServer = class {
       constructor(sessionManager) {
@@ -117,7 +117,7 @@ var init_wrap_server = __esm({
       server = null;
       socketPath;
       async start() {
-        const dir = path7.dirname(this.socketPath);
+        const dir = path6.dirname(this.socketPath);
         if (!fs5.existsSync(dir)) fs5.mkdirSync(dir, { recursive: true, mode: 448 });
         try {
           fs5.chmodSync(dir, 448);
@@ -131,19 +131,19 @@ var init_wrap_server = __esm({
           }
         }
         this.server = net.createServer((socket) => this.handleConnection(socket));
-        await new Promise((resolve4, reject) => {
+        await new Promise((resolve3, reject) => {
           if (!this.server) return reject(new Error("server not initialized"));
           this.server.once("error", reject);
           this.server.listen(this.socketPath, () => {
             fs5.chmodSync(this.socketPath, 384);
-            resolve4();
+            resolve3();
           });
         });
         logger_default.info(`Wrap IPC listening on ${this.socketPath}`);
       }
       async stop() {
         if (!this.server) return;
-        await new Promise((resolve4) => this.server.close(() => resolve4()));
+        await new Promise((resolve3) => this.server.close(() => resolve3()));
         if (fs5.existsSync(this.socketPath)) {
           try {
             fs5.unlinkSync(this.socketPath);
@@ -239,10 +239,10 @@ function buildSnippet() {
     ""
   ].join("\n");
 }
-function candidateRcFiles(home = os7.homedir()) {
+function candidateRcFiles(home = os6.homedir()) {
   return [
-    { path: path9.join(home, ".bashrc"), shell: "bash" },
-    { path: path9.join(home, ".zshrc"), shell: "zsh" }
+    { path: path8.join(home, ".bashrc"), shell: "bash" },
+    { path: path8.join(home, ".zshrc"), shell: "zsh" }
   ];
 }
 function stripAllBlocks(content) {
@@ -271,8 +271,8 @@ function safeRewrite(filePath, nextContent) {
     throw new Error(`refusing to follow symlink: ${filePath}`);
   }
   const mode = lst.mode & 511;
-  const dir = path9.dirname(filePath);
-  const tmp = path9.join(dir, `.${path9.basename(filePath)}.walccy.${process.pid}.tmp`);
+  const dir = path8.dirname(filePath);
+  const tmp = path8.join(dir, `.${path8.basename(filePath)}.walccy.${process.pid}.tmp`);
   fs8.writeFileSync(tmp, nextContent, { encoding: "utf8", mode });
   try {
     fs8.renameSync(tmp, filePath);
@@ -284,7 +284,7 @@ function safeRewrite(filePath, nextContent) {
     throw err;
   }
 }
-function installShellIntegration(home = os7.homedir()) {
+function installShellIntegration(home = os6.homedir()) {
   const result = { modified: [], skipped: [] };
   const snippet = buildSnippet();
   for (const rc of candidateRcFiles(home)) {
@@ -310,7 +310,7 @@ function installShellIntegration(home = os7.homedir()) {
   }
   return result;
 }
-function uninstallShellIntegration(home = os7.homedir()) {
+function uninstallShellIntegration(home = os6.homedir()) {
   const result = { modified: [], skipped: [] };
   for (const rc of candidateRcFiles(home)) {
     if (!fs8.existsSync(rc.path)) {
@@ -333,13 +333,13 @@ function uninstallShellIntegration(home = os7.homedir()) {
   }
   return result;
 }
-var fs8, os7, path9, WRAPPED_ENV_VAR, BEGIN, END, VERSION_TAG;
+var fs8, os6, path8, WRAPPED_ENV_VAR, BEGIN, END, VERSION_TAG;
 var init_shell_installer = __esm({
   "src/shell-installer.ts"() {
     "use strict";
     fs8 = __toESM(require("fs"));
-    os7 = __toESM(require("os"));
-    path9 = __toESM(require("path"));
+    os6 = __toESM(require("os"));
+    path8 = __toESM(require("path"));
     WRAPPED_ENV_VAR = "WALCCY_WRAPPED";
     BEGIN = "# >>> walccy shell integration >>>";
     END = "# <<< walccy shell integration <<<";
@@ -364,7 +364,7 @@ function findInPath(cmd) {
   const PATH = process.env["PATH"] ?? "";
   for (const dir of PATH.split(":")) {
     if (!dir) continue;
-    const full = path10.join(dir, cmd);
+    const full = path9.join(dir, cmd);
     try {
       fs9.accessSync(full, fs9.constants.X_OK);
       return full;
@@ -439,7 +439,7 @@ async function runWrapper(argv) {
         type: "REGISTER",
         pid: term.pid,
         cwd: process.cwd(),
-        name: path10.basename(process.cwd()) || process.cwd(),
+        name: path9.basename(process.cwd()) || process.cwd(),
         cols,
         rows
       }) + "\n"
@@ -523,7 +523,7 @@ async function runWrapper(argv) {
     } catch {
     }
   });
-  await new Promise((resolve4) => {
+  await new Promise((resolve3) => {
     term.onExit(({ exitCode }) => {
       if (process.stdin.isTTY) {
         try {
@@ -538,18 +538,18 @@ async function runWrapper(argv) {
       setTimeout(() => {
         process.exit(exitCode);
       }, 50);
-      resolve4();
+      resolve3();
     });
   });
   return void 0;
 }
-var fs9, net2, path10;
+var fs9, net2, path9;
 var init_wrap_cli = __esm({
   "src/wrap-cli.ts"() {
     "use strict";
     fs9 = __toESM(require("fs"));
     net2 = __toESM(require("net"));
-    path10 = __toESM(require("path"));
+    path9 = __toESM(require("path"));
     init_wrap_server();
     init_shell_installer();
   }
@@ -558,8 +558,8 @@ var init_wrap_cli = __esm({
 // src/index.ts
 var import_commander = require("commander");
 var crypto4 = __toESM(require("crypto"));
-var os8 = __toESM(require("os"));
-var path11 = __toESM(require("path"));
+var os7 = __toESM(require("os"));
+var path10 = __toESM(require("path"));
 
 // package.json
 var package_default = {
@@ -784,7 +784,9 @@ var Session = class _Session extends import_events.EventEmitter {
   /** Timer for detecting idle state (waiting for input). */
   _idleTimer = null;
   _exitWatcher = null;
+  _lastWriteRejectAt = 0;
   static IDLE_TIMEOUT_MS = 3e3;
+  static WRITE_REJECT_WARN_INTERVAL_MS = 5e3;
   constructor(pid, cwd, name, maxBufferLines = 1e4) {
     super();
     this.id = (0, import_uuid.v4)();
@@ -832,6 +834,14 @@ var Session = class _Session extends import_events.EventEmitter {
     this.mode = { kind: "wrap", socket };
     this._info.owned = true;
     this._info.status = "active";
+    socket.on("close", () => {
+      if (this.mode?.kind === "wrap" && this.mode.socket === socket) {
+        this.mode = null;
+        this._info.owned = false;
+        this._info.status = "ended";
+        this.emit("exit");
+      }
+    });
   }
   /** Feed raw output from a wrapper-CLI socket into this session's buffer. */
   pushExternalData(data) {
@@ -939,9 +949,14 @@ var Session = class _Session extends import_events.EventEmitter {
   write(data, clientId) {
     const mode = this.mode;
     if (!mode || mode.kind === "attach") {
-      logger_default.warn(
-        `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? "unknown"})`
-      );
+      const now = Date.now();
+      const msg = `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? "unknown"})`;
+      if (now - this._lastWriteRejectAt > _Session.WRITE_REJECT_WARN_INTERVAL_MS) {
+        logger_default.warn(msg);
+        this._lastWriteRejectAt = now;
+      } else {
+        logger_default.debug(msg);
+      }
       return;
     }
     if (data.length > _Session.MAX_INPUT_LENGTH) {
@@ -961,7 +976,6 @@ var Session = class _Session extends import_events.EventEmitter {
         );
         return;
       case "spawn":
-        void clientId;
         mode.pty.write(data);
         return;
       default: {
@@ -1255,11 +1269,12 @@ var SessionManager = class extends import_events2.EventEmitter {
   /** Forward session 'data' events as session-updated metadata broadcasts. */
   wireSessionEvents(session) {
     session.on("data", () => {
+      const info = session.info;
       this.emit("session-updated", session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput
+        lastActivityAt: info.lastActivityAt,
+        lineCount: info.lineCount,
+        status: info.status,
+        waitingForInput: info.waitingForInput
       });
     });
   }
@@ -1444,6 +1459,8 @@ var DirectoryScanner = class {
     if (!input || typeof input !== "string") return null;
     const trimmed = input.trim();
     if (trimmed.length === 0) return null;
+    if (trimmed.length > 4096) return null;
+    if (trimmed.includes("\0")) return null;
     let expanded = trimmed;
     if (expanded === "~") {
       expanded = this.homeDir;
@@ -1451,9 +1468,15 @@ var DirectoryScanner = class {
       expanded = path5.join(this.homeDir, expanded.slice(2));
     }
     const resolved = path5.resolve(expanded);
-    if (!this.isUnderHome(resolved)) return null;
-    if (!this.isReadableDir(resolved)) return null;
-    return resolved;
+    let real;
+    try {
+      real = fs4.realpathSync.native(resolved);
+    } catch {
+      return null;
+    }
+    if (!this.isUnderHome(real)) return null;
+    if (!this.isReadableDir(real)) return null;
+    return real;
   }
   /** True iff `p` is the user's home directory or a descendant. */
   isUnderHome(p) {
@@ -1462,7 +1485,7 @@ var DirectoryScanner = class {
   // ────────────────────────────────────────────
   // Internals
   // ────────────────────────────────────────────
-  findGitRepos(root, depth, seen, out) {
+  findGitRepos(root, depth, seen, out, visited = /* @__PURE__ */ new Set()) {
     if (depth > MAX_DEPTH) return;
     if (out.length >= MAX_RESULTS) return;
     let entries;
@@ -1472,13 +1495,23 @@ var DirectoryScanner = class {
       logger_default.debug(`directory-scanner: readdir failed for ${root}: ${String(err)}`);
       return;
     }
-    let visited = 0;
+    let visitedCount = 0;
     for (const entry of entries) {
-      if (visited >= MAX_DIRS_PER_ROOT) break;
-      if (!entry.isDirectory()) continue;
+      if (visitedCount >= MAX_DIRS_PER_ROOT) break;
       if (entry.name.startsWith(".")) continue;
       if (entry.name === "node_modules") continue;
       const full = path5.join(root, entry.name);
+      let st;
+      try {
+        st = fs4.lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) continue;
+      if (!st.isDirectory()) continue;
+      const inode = `${st.dev}:${st.ino}`;
+      if (visited.has(inode)) continue;
+      visited.add(inode);
       const gitDir = path5.join(full, ".git");
       let isRepo = false;
       try {
@@ -1496,9 +1529,9 @@ var DirectoryScanner = class {
           seen.add(full);
         }
       } else {
-        this.findGitRepos(full, depth + 1, seen, out);
+        this.findGitRepos(full, depth + 1, seen, out, visited);
       }
-      visited++;
+      visitedCount++;
       if (out.length >= MAX_RESULTS) return;
     }
   }
@@ -1560,10 +1593,17 @@ var ClientRegistry = class {
    * supplied stable ids survive reconnects (push-token bookkeeping).
    */
   rebind(client, newId) {
-    if (newId === client.id) return;
+    if (newId === client.id) return true;
+    if (this.clients.has(newId)) {
+      logger_default.warn(
+        `ClientRegistry.rebind: id collision \u2014 refusing to remap ${client.id} \u2192 ${newId} (already in use)`
+      );
+      return false;
+    }
     this.clients.delete(client.id);
     client.id = newId;
     this.clients.set(client.id, client);
+    return true;
   }
   /**
    * Disconnect cleanup. Always uses client.id (current) so that AUTH-rebound
@@ -1627,16 +1667,18 @@ var ClientRegistry = class {
 
 // src/message-router.ts
 var crypto2 = __toESM(require("crypto"));
-var os4 = __toESM(require("os"));
-var path6 = __toESM(require("path"));
 init_logger();
 var DAEMON_VERSION = package_default.version;
 var MAX_INPUT_LENGTH = 64 * 1024;
-var MessageRouter = class {
+var MessageRouter = class _MessageRouter {
   constructor(deps) {
     this.deps = deps;
   }
   deps;
+  listDirsCache = null;
+  clientListDirsAt = /* @__PURE__ */ new Map();
+  static LIST_DIRS_MIN_INTERVAL_MS = 1e3;
+  static LIST_DIRS_CACHE_TTL_MS = 2e3;
   /**
    * Entry point invoked by ws-transport for every parsed JSON message.
    */
@@ -1714,11 +1756,14 @@ var MessageRouter = class {
       case "REGISTER_PUSH_TOKEN":
         return typeof msg.token === "string" && msg.token.length > 0 && (msg.platform === "android" || msg.platform === "ios");
       case "LIST_DIRECTORIES":
-        return msg.query === void 0 || typeof msg.query === "string";
+        return msg.query === void 0 || typeof msg.query === "string" && msg.query.length <= 256;
       case "SPAWN_SESSION":
         return typeof msg.cwd === "string" && msg.cwd.length > 0 && msg.cwd.length <= 4096 && typeof msg.requestId === "string" && msg.requestId.length > 0;
-      default:
-        return true;
+      default: {
+        const _exhaustive = msg;
+        void _exhaustive;
+        return false;
+      }
     }
   }
   // ────────────────────────────────────────────
@@ -1747,7 +1792,8 @@ var MessageRouter = class {
     }
     const requested = msg.clientId;
     if (typeof requested === "string" && requested.length > 0 && requested.length <= 100 && !requested.includes("\0")) {
-      registry.rebind(client, requested);
+      const rebindOk = registry.rebind(client, requested);
+      void rebindOk;
     }
     const ok = { type: "AUTH_OK", clientId: client.id, daemonVersion: DAEMON_VERSION };
     registry.send(client.ws, ok);
@@ -1767,19 +1813,33 @@ var MessageRouter = class {
     }
     client.subscribedSessions.add(msg.sessionId);
     sessionManager.addClientToSession(msg.sessionId, client.id);
-    const historyCount = config.historyOnConnect;
-    const lines = msg.fromLine !== void 0 ? session.buffer.getLines(msg.fromLine) : session.buffer.getRecent(historyCount);
-    const history = {
-      type: "HISTORY",
-      sessionId: msg.sessionId,
-      lines,
-      totalLines: session.buffer.totalLinesReceived,
-      firstAvailableLine: session.buffer.firstAvailableLine()
-    };
-    registry.send(client.ws, history);
-    logger_default.debug(
-      `Client ${client.id} subscribed to session ${msg.sessionId}, sent ${lines.length} history lines`
-    );
+    if (msg.fromLine !== void 0) {
+      const lines = session.buffer.getLines(msg.fromLine);
+      const reply = {
+        type: "RESUME",
+        sessionId: msg.sessionId,
+        lines,
+        totalLines: session.buffer.totalLinesReceived
+      };
+      registry.send(client.ws, reply);
+      logger_default.debug(
+        `Client ${client.id} resumed session ${msg.sessionId} from line ${msg.fromLine}, sent ${lines.length} lines`
+      );
+    } else {
+      const historyCount = config.historyOnConnect;
+      const lines = session.buffer.getRecent(historyCount);
+      const history = {
+        type: "HISTORY",
+        sessionId: msg.sessionId,
+        lines,
+        totalLines: session.buffer.totalLinesReceived,
+        firstAvailableLine: session.buffer.firstAvailableLine()
+      };
+      registry.send(client.ws, history);
+      logger_default.debug(
+        `Client ${client.id} subscribed to session ${msg.sessionId}, sent ${lines.length} history lines`
+      );
+    }
   }
   _handleUnsubscribe(client, msg) {
     client.subscribedSessions.delete(msg.sessionId);
@@ -1803,6 +1863,10 @@ var MessageRouter = class {
         expiresAt: lock.expiresAt
       };
       registry.send(client.ws, lockMsg);
+      return;
+    }
+    if (!session.owned) {
+      session.write(msg.data, client.id);
       return;
     }
     registry.setInputLock(msg.sessionId, {
@@ -1832,6 +1896,23 @@ var MessageRouter = class {
   }
   _handleListDirectories(client, msg) {
     const { sessionManager, directoryScanner, registry } = this.deps;
+    const now = Date.now();
+    const last = this.clientListDirsAt.get(client.id) ?? 0;
+    if (now - last < _MessageRouter.LIST_DIRS_MIN_INTERVAL_MS && this.listDirsCache && now - this.listDirsCache.at < _MessageRouter.LIST_DIRS_CACHE_TTL_MS) {
+      registry.send(client.ws, {
+        type: "DIRECTORY_LIST",
+        directories: this.listDirsCache.entries
+      });
+      return;
+    }
+    this.clientListDirsAt.set(client.id, now);
+    if (this.listDirsCache && now - this.listDirsCache.at < _MessageRouter.LIST_DIRS_CACHE_TTL_MS && !msg.query) {
+      registry.send(client.ws, {
+        type: "DIRECTORY_LIST",
+        directories: this.listDirsCache.entries
+      });
+      return;
+    }
     const recentCwds = recentCwdsFromSessions(
       sessionManager.getAllSessions().map((s) => s.info)
     );
@@ -1839,6 +1920,9 @@ var MessageRouter = class {
       recentCwds,
       query: msg.query
     });
+    if (!msg.query) {
+      this.listDirsCache = { at: now, entries: directories };
+    }
     const reply = { type: "DIRECTORY_LIST", directories };
     registry.send(client.ws, reply);
   }
@@ -1850,20 +1934,6 @@ var MessageRouter = class {
         type: "SPAWN_RESULT",
         requestId: msg.requestId,
         error: `Directory not accessible: ${msg.cwd}`
-      };
-      registry.send(client.ws, reply);
-      return;
-    }
-    const home = os4.homedir();
-    const resolved = path6.resolve(cwd);
-    if (resolved !== home && !resolved.startsWith(home + path6.sep)) {
-      logger_default.warn(
-        `Rejected SPAWN_SESSION outside home: client=${client.id} cwd=${resolved}`
-      );
-      const reply = {
-        type: "SPAWN_RESULT",
-        requestId: msg.requestId,
-        error: "cwd must be under your home directory"
       };
       registry.send(client.ws, reply);
       return;
@@ -1937,12 +2007,12 @@ var WsTransport = class {
     this.wss.on("connection", (ws) => {
       this._handleConnection(ws);
     });
-    await new Promise((resolve4, reject) => {
+    await new Promise((resolve3, reject) => {
       this.httpServer.listen(this.config.port, this.bindAddress, () => {
         logger_default.info(
           `WebSocket server listening on ws://${this.bindAddress}:${this.config.port}`
         );
-        resolve4();
+        resolve3();
       });
       this.httpServer.once("error", reject);
     });
@@ -2157,7 +2227,7 @@ function createJwt(sa) {
 }
 async function getAccessToken(sa) {
   const jwt = createJwt(sa);
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve3, reject) => {
     const body = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
     const url = new URL(sa.token_uri);
     const req = https.request(
@@ -2177,7 +2247,7 @@ async function getAccessToken(sa) {
           try {
             const parsed = JSON.parse(data);
             if (parsed.access_token) {
-              resolve4(parsed.access_token);
+              resolve3(parsed.access_token);
             } else {
               reject(new Error(`OAuth token response missing access_token: ${data}`));
             }
@@ -2270,7 +2340,7 @@ var PushService = class {
         ...data ? { data } : {}
       }
     };
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve3, reject) => {
       const payload = JSON.stringify(message);
       const req = https.request(
         {
@@ -2289,7 +2359,7 @@ var PushService = class {
           res.on("end", () => {
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
               logger_default.debug(`FCM push sent to ${pushToken.clientId}`);
-              resolve4();
+              resolve3();
             } else {
               logger_default.warn(
                 `FCM push failed (${res.statusCode}): ${responseData}`
@@ -2302,14 +2372,14 @@ var PushService = class {
                   this.pushTokens.delete(pushToken.clientId);
                 }
               }
-              resolve4();
+              resolve3();
             }
           });
         }
       );
       req.on("error", (err) => {
         logger_default.warn(`FCM request error: ${err.message}`);
-        resolve4();
+        resolve3();
       });
       req.write(payload);
       req.end();
@@ -2360,7 +2430,7 @@ async function waitForTailscale(intervalMs = 1e4, maxRetries = 30) {
   );
 }
 function delay(ms) {
-  return new Promise((resolve4) => setTimeout(resolve4, ms));
+  return new Promise((resolve3) => setTimeout(resolve3, ms));
 }
 
 // src/daemon.ts
@@ -2426,20 +2496,20 @@ var Daemon = class {
 
 // src/installer.ts
 var fs7 = __toESM(require("fs"));
-var path8 = __toESM(require("path"));
-var os6 = __toESM(require("os"));
+var path7 = __toESM(require("path"));
+var os5 = __toESM(require("os"));
 var import_child_process2 = require("child_process");
 var import_util2 = require("util");
 var execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
 function getServiceDir() {
-  return path8.join(os6.homedir(), ".config", "systemd", "user");
+  return path7.join(os5.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path8.join(getServiceDir(), "walccy.service");
+  return path7.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path8.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path7.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -2625,7 +2695,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os8.hostname();
+  const hostname2 = os7.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -2684,13 +2754,13 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path11.dirname(configPath);
+        const configDir = path10.dirname(configPath);
         const fs10 = await import("fs");
         if (fs10.existsSync(configDir)) {
           fs10.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path11.join(os8.homedir(), ".walccy");
+        const logDir2 = path10.join(os7.homedir(), ".walccy");
         if (fs10.existsSync(logDir2)) {
           fs10.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
