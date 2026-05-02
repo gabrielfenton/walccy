@@ -57,11 +57,18 @@ export class ClientRegistry {
    * Rebind a client to a new (persistent) id — used during AUTH so device-
    * supplied stable ids survive reconnects (push-token bookkeeping).
    */
-  rebind(client: ConnectedClient, newId: string): void {
-    if (newId === client.id) return;
+  rebind(client: ConnectedClient, newId: string): boolean {
+    if (newId === client.id) return true;
+    if (this.clients.has(newId)) {
+      logger.warn(
+        `ClientRegistry.rebind: id collision — refusing to remap ${client.id} → ${newId} (already in use)`
+      );
+      return false;
+    }
     this.clients.delete(client.id);
     client.id = newId;
     this.clients.set(client.id, client);
+    return true;
   }
 
   /**

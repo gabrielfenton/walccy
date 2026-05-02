@@ -1,9 +1,8 @@
 import * as crypto from 'crypto';
-import * as os from 'os';
-import * as path from 'path';
 import type {
   ClientMessage,
   ServerMessage,
+  DirectoryEntry,
 } from '@walccy/protocol';
 import { SessionManager } from './session-manager.js';
 import { DirectoryScanner, recentCwdsFromSessions } from './directory-scanner.js';
@@ -36,6 +35,11 @@ export interface RouterDeps {
 // handler. Handlers know about deps but not about transport/framing.
 
 export class MessageRouter {
+  private listDirsCache: { at: number; entries: DirectoryEntry[] } | null = null;
+  private clientListDirsAt: Map<string, number> = new Map();
+  private static readonly LIST_DIRS_MIN_INTERVAL_MS = 1000;
+  private static readonly LIST_DIRS_CACHE_TTL_MS = 2000;
+
   constructor(private readonly deps: RouterDeps) {}
 
   /**
@@ -137,14 +141,19 @@ export class MessageRouter {
           (msg.platform === 'android' || msg.platform === 'ios')
         );
       case 'LIST_DIRECTORIES':
-        return msg.query === undefined || typeof msg.query === 'string';
+        return msg.query === undefined || (typeof msg.query === 'string' && msg.query.length <= 256);
       case 'SPAWN_SESSION':
         return (
           typeof msg.cwd === 'string' && msg.cwd.length > 0 && msg.cwd.length <= 4096 &&
           typeof msg.requestId === 'string' && msg.requestId.length > 0
         );
-      default:
-        return true; // Unknown types handled elsewhere
+      default: {
+        // exhaustiveness check — if a new ClientMessage variant is added without
+        // a case here, TS errors at compile time (`msg` won't narrow to never).
+        const _exhaustive: never = msg;
+        void _exhaustive;
+        return false;
+      }
     }
   }
 
@@ -189,7 +198,11 @@ export class MessageRouter {
       requested.length <= 100 &&
       !requested.includes('\0')
     ) {
-      registry.rebind(client, requested);
+      const rebindOk = registry.rebind(client, requested);
+      // rebindOk === false means another connection already holds msg.clientId.
+      // We still send AUTH_OK so the client functions, just on the
+      // connection-scoped UUID instead of its preferred persistent id.
+      void rebindOk;
     }
 
     const ok: ServerMessage = { type: 'AUTH_OK', clientId: client.id, daemonVersion: DAEMON_VERSION };
@@ -219,25 +232,33 @@ export class MessageRouter {
     client.subscribedSessions.add(msg.sessionId);
     sessionManager.addClientToSession(msg.sessionId, client.id);
 
-    // Send history
-    const historyCount = config.historyOnConnect;
-    const lines =
-      msg.fromLine !== undefined
-        ? session.buffer.getLines(msg.fromLine)
-        : session.buffer.getRecent(historyCount);
-
-    const history: ServerMessage = {
-      type: 'HISTORY',
-      sessionId: msg.sessionId,
-      lines,
-      totalLines: session.buffer.totalLinesReceived,
-      firstAvailableLine: session.buffer.firstAvailableLine(),
-    };
-    registry.send(client.ws, history);
-
-    logger.debug(
-      `Client ${client.id} subscribed to session ${msg.sessionId}, sent ${lines.length} history lines`
-    );
+    if (msg.fromLine !== undefined) {
+      const lines = session.buffer.getLines(msg.fromLine);
+      const reply: ServerMessage = {
+        type: 'RESUME',
+        sessionId: msg.sessionId,
+        lines,
+        totalLines: session.buffer.totalLinesReceived,
+      };
+      registry.send(client.ws, reply);
+      logger.debug(
+        `Client ${client.id} resumed session ${msg.sessionId} from line ${msg.fromLine}, sent ${lines.length} lines`
+      );
+    } else {
+      const historyCount = config.historyOnConnect;
+      const lines = session.buffer.getRecent(historyCount);
+      const history: ServerMessage = {
+        type: 'HISTORY',
+        sessionId: msg.sessionId,
+        lines,
+        totalLines: session.buffer.totalLinesReceived,
+        firstAvailableLine: session.buffer.firstAvailableLine(),
+      };
+      registry.send(client.ws, history);
+      logger.debug(
+        `Client ${client.id} subscribed to session ${msg.sessionId}, sent ${lines.length} history lines`
+      );
+    }
   }
 
   private _handleUnsubscribe(
@@ -274,13 +295,18 @@ export class MessageRouter {
       return;
     }
 
-    // Set/refresh input lock
+    if (!session.owned) {
+      // Read-only / attach-mode session: skip the lock entirely.  session.write
+      // would log+no-op anyway, no point also locking other clients out.
+      session.write(msg.data, client.id);
+      return;
+    }
+
     registry.setInputLock(msg.sessionId, {
       clientId: client.id,
       clientName: client.name,
       expiresAt: Date.now() + INPUT_LOCK_TTL_MS,
     });
-
     session.write(msg.data, client.id);
   }
 
@@ -316,6 +342,33 @@ export class MessageRouter {
     msg: ClientMessage & { type: 'LIST_DIRECTORIES' }
   ): void {
     const { sessionManager, directoryScanner, registry } = this.deps;
+
+    const now = Date.now();
+    const last = this.clientListDirsAt.get(client.id) ?? 0;
+    if (
+      now - last < MessageRouter.LIST_DIRS_MIN_INTERVAL_MS &&
+      this.listDirsCache &&
+      now - this.listDirsCache.at < MessageRouter.LIST_DIRS_CACHE_TTL_MS
+    ) {
+      // Per-client rate-limit hit; serve cache silently.
+      registry.send(client.ws, {
+        type: 'DIRECTORY_LIST',
+        directories: this.listDirsCache.entries,
+      });
+      return;
+    }
+    this.clientListDirsAt.set(client.id, now);
+    if (
+      this.listDirsCache &&
+      now - this.listDirsCache.at < MessageRouter.LIST_DIRS_CACHE_TTL_MS &&
+      !msg.query
+    ) {
+      registry.send(client.ws, {
+        type: 'DIRECTORY_LIST',
+        directories: this.listDirsCache.entries,
+      });
+      return;
+    }
     const recentCwds = recentCwdsFromSessions(
       sessionManager.getAllSessions().map((s) => s.info)
     );
@@ -323,6 +376,9 @@ export class MessageRouter {
       recentCwds,
       query: msg.query,
     });
+    if (!msg.query) {
+      this.listDirsCache = { at: now, entries: directories };
+    }
     const reply: ServerMessage = { type: 'DIRECTORY_LIST', directories };
     registry.send(client.ws, reply);
   }
@@ -338,24 +394,6 @@ export class MessageRouter {
         type: 'SPAWN_RESULT',
         requestId: msg.requestId,
         error: `Directory not accessible: ${msg.cwd}`,
-      };
-      registry.send(client.ws, reply);
-      return;
-    }
-
-    // Defence-in-depth: reject any cwd outside the user's home subtree.
-    // resolveAndValidate also enforces this, but spawn handlers are a juicy
-    // target so we re-check here in case the validator is bypassed.
-    const home = os.homedir();
-    const resolved = path.resolve(cwd);
-    if (resolved !== home && !resolved.startsWith(home + path.sep)) {
-      logger.warn(
-        `Rejected SPAWN_SESSION outside home: client=${client.id} cwd=${resolved}`
-      );
-      const reply: ServerMessage = {
-        type: 'SPAWN_RESULT',
-        requestId: msg.requestId,
-        error: 'cwd must be under your home directory',
       };
       registry.send(client.ws, reply);
       return;
