@@ -57,7 +57,9 @@ export class Session extends EventEmitter {
   /** Timer for detecting idle state (waiting for input). */
   private _idleTimer: ReturnType<typeof setTimeout> | null = null;
   private _exitWatcher: ReturnType<typeof setInterval> | null = null;
+  private _lastWriteRejectAt: number = 0;
   private static readonly IDLE_TIMEOUT_MS = 3000;
+  private static readonly WRITE_REJECT_WARN_INTERVAL_MS = 5000;
 
   constructor(pid: number, cwd: string, name: string, maxBufferLines = 10000) {
     super();
@@ -113,6 +115,18 @@ export class Session extends EventEmitter {
     this.mode = { kind: 'wrap', socket };
     this._info.owned = true;
     this._info.status = 'active';
+
+    socket.on('close', () => {
+      // Only react if this is still the bound socket. kill() already does
+      // snapshot-then-null on this.mode, so it'll have set mode=null before
+      // calling socket.destroy(); in that path this handler short-circuits.
+      if (this.mode?.kind === 'wrap' && this.mode.socket === socket) {
+        this.mode = null;
+        this._info.owned = false;
+        this._info.status = 'ended';
+        this.emit('exit');
+      }
+    });
   }
 
   /** Feed raw output from a wrapper-CLI socket into this session's buffer. */
@@ -245,9 +259,14 @@ export class Session extends EventEmitter {
   write(data: string, clientId?: string): void {
     const mode = this.mode;
     if (!mode || mode.kind === 'attach') {
-      logger.warn(
-        `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? 'unknown'})`
-      );
+      const now = Date.now();
+      const msg = `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? 'unknown'})`;
+      if (now - this._lastWriteRejectAt > Session.WRITE_REJECT_WARN_INTERVAL_MS) {
+        logger.warn(msg);
+        this._lastWriteRejectAt = now;
+      } else {
+        logger.debug(msg);
+      }
       return;
     }
 
@@ -274,7 +293,6 @@ export class Session extends EventEmitter {
         );
         return;
       case 'spawn':
-        void clientId;
         mode.pty.write(data);
         return;
       default: {
