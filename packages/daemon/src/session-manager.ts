@@ -182,11 +182,12 @@ export class SessionManager extends EventEmitter {
   /** Forward session 'data' events as session-updated metadata broadcasts. */
   private wireSessionEvents(session: Session): void {
     session.on('data', () => {
+      const info = session.info;
       this.emit('session-updated', session.id, {
-        lastActivityAt: session.info.lastActivityAt,
-        lineCount: session.info.lineCount,
-        status: session.info.status,
-        waitingForInput: session.info.waitingForInput,
+        lastActivityAt: info.lastActivityAt,
+        lineCount: info.lineCount,
+        status: info.status,
+        waitingForInput: info.waitingForInput,
       });
     });
   }
