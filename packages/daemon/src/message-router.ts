@@ -1,4 +1,3 @@
-import * as crypto from 'crypto';
 import type {
   ClientMessage,
   ServerMessage,
@@ -13,10 +12,10 @@ import {
   ConnectedClient,
   INPUT_LOCK_TTL_MS,
 } from './client-registry.js';
+import { handleAuth } from './auth-handler.js';
+import { handleSpawnSession } from './spawn-handler.js';
 import logger from './logger.js';
-import pkg from '../package.json';
 
-const DAEMON_VERSION: string = pkg.version;
 const MAX_INPUT_LENGTH = 64 * 1024; // 64 KB max input
 
 export interface RouterDeps {
@@ -65,7 +64,11 @@ export class MessageRouter {
         client.ws.close(1008, 'Not authenticated');
         return;
       }
-      this._handleAuth(client, typed);
+      handleAuth(client, typed, {
+        config: this.deps.config,
+        registry: this.deps.registry,
+        pushService: this.deps.pushService,
+      });
       return;
     }
 
@@ -98,7 +101,12 @@ export class MessageRouter {
         this._handleListDirectories(client, typed);
         break;
       case 'SPAWN_SESSION':
-        void this._handleSpawnSession(client, typed);
+        void handleSpawnSession(client, typed, {
+          sessionManager: this.deps.sessionManager,
+          directoryScanner: this.deps.directoryScanner,
+          registry: this.deps.registry,
+          config: this.deps.config,
+        });
         break;
       default:
         this.deps.registry.sendError(client.ws, 'UNKNOWN_TYPE', 'Unknown message type');
@@ -160,55 +168,6 @@ export class MessageRouter {
   // ────────────────────────────────────────────
   // Handlers
   // ────────────────────────────────────────────
-
-  private _handleAuth(client: ConnectedClient, msg: ClientMessage & { type: 'AUTH' }): void {
-    const { config, registry } = this.deps;
-
-    const secretBuf = Buffer.from(String(msg.secret));
-    const expectedBuf = Buffer.from(config.authSecret);
-    const isValid =
-      secretBuf.length === expectedBuf.length &&
-      crypto.timingSafeEqual(secretBuf, expectedBuf);
-
-    if (!isValid) {
-      logger.warn(`WS client ${client.id}: auth failed`);
-      const fail: ServerMessage = {
-        type: 'AUTH_FAIL',
-        reason: 'Invalid secret',
-      };
-      registry.send(client.ws, fail);
-      client.ws.close(1008, 'Auth failed');
-      return;
-    }
-
-    client.isAuthenticated = true;
-    client.name = msg.clientName || 'unknown';
-    if (client.authTimeout) {
-      clearTimeout(client.authTimeout);
-      client.authTimeout = undefined;
-    }
-
-    // Rebind to the device-supplied persistent clientId so push-token
-    // registrations survive reconnects. The transient connection UUID is
-    // only used until AUTH succeeds (so the auth-timeout cleanup works).
-    const requested = msg.clientId;
-    if (
-      typeof requested === 'string' &&
-      requested.length > 0 &&
-      requested.length <= 100 &&
-      !requested.includes('\0')
-    ) {
-      const rebindOk = registry.rebind(client, requested);
-      // rebindOk === false means another connection already holds msg.clientId.
-      // We still send AUTH_OK so the client functions, just on the
-      // connection-scoped UUID instead of its preferred persistent id.
-      void rebindOk;
-    }
-
-    const ok: ServerMessage = { type: 'AUTH_OK', clientId: client.id, daemonVersion: DAEMON_VERSION };
-    registry.send(client.ws, ok);
-    logger.info(`WS client authenticated: ${client.id} (${client.name})`);
-  }
 
   private _handleListSessions(client: ConnectedClient): void {
     const sessions = this.deps.sessionManager
@@ -383,63 +342,4 @@ export class MessageRouter {
     registry.send(client.ws, reply);
   }
 
-  private async _handleSpawnSession(
-    client: ConnectedClient,
-    msg: ClientMessage & { type: 'SPAWN_SESSION' }
-  ): Promise<void> {
-    const { sessionManager, directoryScanner, registry, config } = this.deps;
-    const cwd = directoryScanner.resolveAndValidate(msg.cwd);
-    if (!cwd) {
-      const reply: ServerMessage = {
-        type: 'SPAWN_RESULT',
-        requestId: msg.requestId,
-        error: `Directory not accessible: ${msg.cwd}`,
-      };
-      registry.send(client.ws, reply);
-      return;
-    }
-
-    // Concurrent-spawn cap.  Counts daemon-owned sessions only — externally
-    // discovered (read-only) sessions don't consume a spawn slot.
-    const cap = config.maxSpawnedSessions;
-    if (cap > 0) {
-      const ownedCount = sessionManager
-        .getAllSessions()
-        .filter((s) => s.info.owned).length;
-      if (ownedCount >= cap) {
-        logger.warn(
-          `Rejected SPAWN_SESSION over cap: client=${client.id} owned=${ownedCount} cap=${cap}`
-        );
-        const reply: ServerMessage = {
-          type: 'SPAWN_RESULT',
-          requestId: msg.requestId,
-          error: `Spawned-session cap reached (${cap}). Close an existing session and try again.`,
-        };
-        registry.send(client.ws, reply);
-        return;
-      }
-    }
-
-    try {
-      const session = await sessionManager.spawnSession(cwd);
-      const reply: ServerMessage = {
-        type: 'SPAWN_RESULT',
-        requestId: msg.requestId,
-        sessionId: session.id,
-      };
-      registry.send(client.ws, reply);
-      logger.info(
-        `Spawn requested by ${client.id} (${client.name}) cwd=${cwd} → session ${session.id}`
-      );
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      logger.warn(`Spawn failed for ${client.id} cwd=${cwd}: ${reason}`);
-      const reply: ServerMessage = {
-        type: 'SPAWN_RESULT',
-        requestId: msg.requestId,
-        error: reason,
-      };
-      registry.send(client.ws, reply);
-    }
-  }
 }
