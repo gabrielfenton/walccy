@@ -350,6 +350,7 @@ var init_shell_installer = __esm({
 // src/wrap-cli.ts
 var wrap_cli_exports = {};
 __export(wrap_cli_exports, {
+  findInPath: () => findInPath,
   runWrapper: () => runWrapper
 });
 function findInPath(cmd) {
@@ -1713,10 +1714,96 @@ var ClientRegistry = class {
   }
 };
 
-// src/message-router.ts
+// src/auth-handler.ts
 var crypto2 = __toESM(require("crypto"));
 init_logger();
 var DAEMON_VERSION = package_default.version;
+function handleAuth(client, msg, deps) {
+  const { config, registry } = deps;
+  const secretBuf = Buffer.from(String(msg.secret));
+  const expectedBuf = Buffer.from(config.authSecret);
+  const isValid = secretBuf.length === expectedBuf.length && crypto2.timingSafeEqual(secretBuf, expectedBuf);
+  if (!isValid) {
+    logger_default.warn(`WS client ${client.id}: auth failed`);
+    const fail = {
+      type: "AUTH_FAIL",
+      reason: "Invalid secret"
+    };
+    registry.send(client.ws, fail);
+    client.ws.close(1008, "Auth failed");
+    return;
+  }
+  client.isAuthenticated = true;
+  client.name = msg.clientName || "unknown";
+  if (client.authTimeout) {
+    clearTimeout(client.authTimeout);
+    client.authTimeout = void 0;
+  }
+  const requested = msg.clientId;
+  if (typeof requested === "string" && requested.length > 0 && requested.length <= 100 && !requested.includes("\0")) {
+    const rebindOk = registry.rebind(client, requested);
+    void rebindOk;
+  }
+  const ok = { type: "AUTH_OK", clientId: client.id, daemonVersion: DAEMON_VERSION };
+  registry.send(client.ws, ok);
+  logger_default.info(`WS client authenticated: ${client.id} (${client.name})`);
+}
+
+// src/spawn-handler.ts
+init_logger();
+async function handleSpawnSession(client, msg, deps) {
+  const { sessionManager, directoryScanner, registry, config } = deps;
+  const cwd = directoryScanner.resolveAndValidate(msg.cwd);
+  if (!cwd) {
+    const reply = {
+      type: "SPAWN_RESULT",
+      requestId: msg.requestId,
+      error: `Directory not accessible: ${msg.cwd}`
+    };
+    registry.send(client.ws, reply);
+    return;
+  }
+  const cap = config.maxSpawnedSessions;
+  if (cap > 0) {
+    const ownedCount = sessionManager.getAllSessions().filter((s) => s.info.owned).length;
+    if (ownedCount >= cap) {
+      logger_default.warn(
+        `Rejected SPAWN_SESSION over cap: client=${client.id} owned=${ownedCount} cap=${cap}`
+      );
+      const reply = {
+        type: "SPAWN_RESULT",
+        requestId: msg.requestId,
+        error: `Spawned-session cap reached (${cap}). Close an existing session and try again.`
+      };
+      registry.send(client.ws, reply);
+      return;
+    }
+  }
+  try {
+    const session = await sessionManager.spawnSession(cwd);
+    const reply = {
+      type: "SPAWN_RESULT",
+      requestId: msg.requestId,
+      sessionId: session.id
+    };
+    registry.send(client.ws, reply);
+    logger_default.info(
+      `Spawn requested by ${client.id} (${client.name}) cwd=${cwd} \u2192 session ${session.id}`
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger_default.warn(`Spawn failed for ${client.id} cwd=${cwd}: ${reason}`);
+    const reply = {
+      type: "SPAWN_RESULT",
+      requestId: msg.requestId,
+      error: reason
+    };
+    registry.send(client.ws, reply);
+  }
+}
+
+// src/message-router.ts
+init_logger();
 var MAX_INPUT_LENGTH = 64 * 1024;
 var MessageRouter = class _MessageRouter {
   constructor(deps) {
@@ -1746,7 +1833,11 @@ var MessageRouter = class _MessageRouter {
         client.ws.close(1008, "Not authenticated");
         return;
       }
-      this._handleAuth(client, typed);
+      handleAuth(client, typed, {
+        config: this.deps.config,
+        registry: this.deps.registry,
+        pushService: this.deps.pushService
+      });
       return;
     }
     switch (typed.type) {
@@ -1777,7 +1868,12 @@ var MessageRouter = class _MessageRouter {
         this._handleListDirectories(client, typed);
         break;
       case "SPAWN_SESSION":
-        void this._handleSpawnSession(client, typed);
+        void handleSpawnSession(client, typed, {
+          sessionManager: this.deps.sessionManager,
+          directoryScanner: this.deps.directoryScanner,
+          registry: this.deps.registry,
+          config: this.deps.config
+        });
         break;
       default:
         this.deps.registry.sendError(client.ws, "UNKNOWN_TYPE", "Unknown message type");
@@ -1817,36 +1913,6 @@ var MessageRouter = class _MessageRouter {
   // ────────────────────────────────────────────
   // Handlers
   // ────────────────────────────────────────────
-  _handleAuth(client, msg) {
-    const { config, registry } = this.deps;
-    const secretBuf = Buffer.from(String(msg.secret));
-    const expectedBuf = Buffer.from(config.authSecret);
-    const isValid = secretBuf.length === expectedBuf.length && crypto2.timingSafeEqual(secretBuf, expectedBuf);
-    if (!isValid) {
-      logger_default.warn(`WS client ${client.id}: auth failed`);
-      const fail = {
-        type: "AUTH_FAIL",
-        reason: "Invalid secret"
-      };
-      registry.send(client.ws, fail);
-      client.ws.close(1008, "Auth failed");
-      return;
-    }
-    client.isAuthenticated = true;
-    client.name = msg.clientName || "unknown";
-    if (client.authTimeout) {
-      clearTimeout(client.authTimeout);
-      client.authTimeout = void 0;
-    }
-    const requested = msg.clientId;
-    if (typeof requested === "string" && requested.length > 0 && requested.length <= 100 && !requested.includes("\0")) {
-      const rebindOk = registry.rebind(client, requested);
-      void rebindOk;
-    }
-    const ok = { type: "AUTH_OK", clientId: client.id, daemonVersion: DAEMON_VERSION };
-    registry.send(client.ws, ok);
-    logger_default.info(`WS client authenticated: ${client.id} (${client.name})`);
-  }
   _handleListSessions(client) {
     const sessions = this.deps.sessionManager.getAllSessions().map((s) => s.info);
     const msg = { type: "SESSIONS", sessions };
@@ -1973,56 +2039,6 @@ var MessageRouter = class _MessageRouter {
     }
     const reply = { type: "DIRECTORY_LIST", directories };
     registry.send(client.ws, reply);
-  }
-  async _handleSpawnSession(client, msg) {
-    const { sessionManager, directoryScanner, registry, config } = this.deps;
-    const cwd = directoryScanner.resolveAndValidate(msg.cwd);
-    if (!cwd) {
-      const reply = {
-        type: "SPAWN_RESULT",
-        requestId: msg.requestId,
-        error: `Directory not accessible: ${msg.cwd}`
-      };
-      registry.send(client.ws, reply);
-      return;
-    }
-    const cap = config.maxSpawnedSessions;
-    if (cap > 0) {
-      const ownedCount = sessionManager.getAllSessions().filter((s) => s.info.owned).length;
-      if (ownedCount >= cap) {
-        logger_default.warn(
-          `Rejected SPAWN_SESSION over cap: client=${client.id} owned=${ownedCount} cap=${cap}`
-        );
-        const reply = {
-          type: "SPAWN_RESULT",
-          requestId: msg.requestId,
-          error: `Spawned-session cap reached (${cap}). Close an existing session and try again.`
-        };
-        registry.send(client.ws, reply);
-        return;
-      }
-    }
-    try {
-      const session = await sessionManager.spawnSession(cwd);
-      const reply = {
-        type: "SPAWN_RESULT",
-        requestId: msg.requestId,
-        sessionId: session.id
-      };
-      registry.send(client.ws, reply);
-      logger_default.info(
-        `Spawn requested by ${client.id} (${client.name}) cwd=${cwd} \u2192 session ${session.id}`
-      );
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      logger_default.warn(`Spawn failed for ${client.id} cwd=${cwd}: ${reason}`);
-      const reply = {
-        type: "SPAWN_RESULT",
-        requestId: msg.requestId,
-        error: reason
-      };
-      registry.send(client.ws, reply);
-    }
   }
 };
 
