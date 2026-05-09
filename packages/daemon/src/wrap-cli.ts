@@ -19,7 +19,7 @@ import { WRAPPED_ENV_VAR } from './shell-installer.js';
  * with exit=1, which gives a confusing "execvp(3) failed" line and no
  * actionable message — so we probe up front.
  */
-function findInPath(cmd: string): string | null {
+export function findInPath(cmd: string): string | null {
   if (cmd.includes('/')) {
     try {
       fs.accessSync(cmd, fs.constants.X_OK);
