@@ -31,6 +31,14 @@ export class NotificationDispatcher {
    */
   private pendingOutput: Map<string, BufferedLine[]> = new Map();
   private outputScheduled: Set<string> = new Set();
+  /**
+   * Defense-in-depth cache of the last observed waitingForInput value per
+   * session. Session._resetIdleTimer is edge-triggered at the source today,
+   * but we don't want to depend on that invariant from a different module —
+   * if upstream ever re-emits current state (refactor, metadata refresh,
+   * resync), we still only push on the false→true edge as observed by us.
+   */
+  private waitingState: Map<string, boolean> = new Map();
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -109,6 +117,7 @@ export class NotificationDispatcher {
     this.wiredSessions.delete(sessionId);
     this.pendingOutput.delete(sessionId);
     this.outputScheduled.delete(sessionId);
+    this.waitingState.delete(sessionId);
     this.registry.clearInputLock(sessionId);
   }
 
@@ -119,17 +128,24 @@ export class NotificationDispatcher {
     const msg: ServerMessage = { type: 'SESSION_UPDATED', sessionId, changes };
     this.registry.broadcastAll(msg);
 
-    // Send FCM push when a session starts waiting for input
-    if (changes.waitingForInput === true && this.pushService?.isEnabled) {
-      const session = this.sessionManager.getSession(sessionId);
-      const name = session?.info.name ?? 'Claude';
-      this.pushService.sendToAll(
-        `${name} needs input`,
-        'Claude has finished its task and is waiting for your response.',
-        { sessionId }
-      ).catch((err) => {
-        logger.warn(`FCM push error: ${String(err)}`);
-      });
+    // Defense-in-depth: only push on the false→true edge as observed by us,
+    // even if upstream re-emits the same state.
+    if (changes.waitingForInput !== undefined) {
+      const previous = this.waitingState.get(sessionId) ?? false;
+      const next = changes.waitingForInput === true;
+      this.waitingState.set(sessionId, next);
+
+      if (!previous && next && this.pushService?.isEnabled) {
+        const session = this.sessionManager.getSession(sessionId);
+        const name = session?.info.name ?? 'Claude';
+        this.pushService.sendToAll(
+          `${name} needs input`,
+          'Claude has finished its task and is waiting for your response.',
+          { sessionId }
+        ).catch((err) => {
+          logger.warn(`FCM push error: ${String(err)}`);
+        });
+      }
     }
   }
 }
