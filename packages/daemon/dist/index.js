@@ -1581,6 +1581,11 @@ var ClientRegistry = class {
   pushService;
   clients = /* @__PURE__ */ new Map();
   inputLocks = /* @__PURE__ */ new Map();
+  // Reverse index: sessionId → set of clientIds subscribed to it. Mirrors
+  // ConnectedClient.subscribedSessions so broadcastToSession is O(K subscribers)
+  // instead of O(N clients). Mutated only via addSubscription/removeSubscription
+  // (and remove() on disconnect) — keep the two indexes consistent.
+  sessionSubscribers = /* @__PURE__ */ new Map();
   // ────────── client lifecycle ──────────
   add(client) {
     this.clients.set(client.id, client);
@@ -1600,9 +1605,14 @@ var ClientRegistry = class {
       );
       return false;
     }
-    this.clients.delete(client.id);
+    const oldId = client.id;
+    this.clients.delete(oldId);
     client.id = newId;
     this.clients.set(client.id, client);
+    for (const sessionId of client.subscribedSessions) {
+      this._untrackSubscription(oldId, sessionId);
+      this._trackSubscription(newId, sessionId);
+    }
     return true;
   }
   /**
@@ -1612,9 +1622,43 @@ var ClientRegistry = class {
   remove(client) {
     for (const sessionId of client.subscribedSessions) {
       this.sessionManager.removeClientFromSession(sessionId, client.id);
+      this._untrackSubscription(client.id, sessionId);
     }
+    client.subscribedSessions.clear();
     this.pushService?.unregisterClient(client.id);
     this.clients.delete(client.id);
+  }
+  // ────────── subscriptions ──────────
+  //
+  // Public mutation entry points for the per-client subscribedSessions set.
+  // External callers MUST use these (not client.subscribedSessions.add/delete
+  // directly) so the sessionSubscribers reverse index stays in sync.
+  addSubscription(clientId, sessionId) {
+    const client = this.clients.get(clientId);
+    if (!client) return;
+    if (client.subscribedSessions.has(sessionId)) return;
+    client.subscribedSessions.add(sessionId);
+    this._trackSubscription(clientId, sessionId);
+  }
+  removeSubscription(clientId, sessionId) {
+    const client = this.clients.get(clientId);
+    if (!client) return;
+    if (!client.subscribedSessions.delete(sessionId)) return;
+    this._untrackSubscription(clientId, sessionId);
+  }
+  _trackSubscription(clientId, sessionId) {
+    let subs = this.sessionSubscribers.get(sessionId);
+    if (!subs) {
+      subs = /* @__PURE__ */ new Set();
+      this.sessionSubscribers.set(sessionId, subs);
+    }
+    subs.add(clientId);
+  }
+  _untrackSubscription(clientId, sessionId) {
+    const subs = this.sessionSubscribers.get(sessionId);
+    if (!subs) return;
+    subs.delete(clientId);
+    if (subs.size === 0) this.sessionSubscribers.delete(sessionId);
   }
   // ────────── input locks ──────────
   getInputLock(sessionId) {
@@ -1652,14 +1696,18 @@ var ClientRegistry = class {
     }
   }
   broadcastToSession(sessionId, msg) {
+    const subs = this.sessionSubscribers.get(sessionId);
+    if (!subs || subs.size === 0) return;
     const payload = JSON.stringify(msg);
-    for (const client of this.clients.values()) {
-      if (client.isAuthenticated && client.subscribedSessions.has(sessionId) && client.ws.readyState === import_ws.WebSocket.OPEN) {
-        try {
-          client.ws.send(payload);
-        } catch (err) {
-          logger_default.debug(`Session broadcast error to ${client.id}: ${String(err)}`);
-        }
+    for (const clientId of subs) {
+      const client = this.clients.get(clientId);
+      if (!client || !client.isAuthenticated || client.ws.readyState !== import_ws.WebSocket.OPEN) {
+        continue;
+      }
+      try {
+        client.ws.send(payload);
+      } catch (err) {
+        logger_default.debug(`Session broadcast error to ${client.id}: ${String(err)}`);
       }
     }
   }
@@ -1811,7 +1859,7 @@ var MessageRouter = class _MessageRouter {
       registry.sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
       return;
     }
-    client.subscribedSessions.add(msg.sessionId);
+    registry.addSubscription(client.id, msg.sessionId);
     sessionManager.addClientToSession(msg.sessionId, client.id);
     if (msg.fromLine !== void 0) {
       const lines = session.buffer.getLines(msg.fromLine);
@@ -1842,7 +1890,7 @@ var MessageRouter = class _MessageRouter {
     }
   }
   _handleUnsubscribe(client, msg) {
-    client.subscribedSessions.delete(msg.sessionId);
+    this.deps.registry.removeSubscription(client.id, msg.sessionId);
     this.deps.sessionManager.removeClientFromSession(msg.sessionId, client.id);
     logger_default.debug(`Client ${client.id} unsubscribed from session ${msg.sessionId}`);
   }
@@ -2087,6 +2135,14 @@ var NotificationDispatcher = class {
    */
   pendingOutput = /* @__PURE__ */ new Map();
   outputScheduled = /* @__PURE__ */ new Set();
+  /**
+   * Defense-in-depth cache of the last observed waitingForInput value per
+   * session. Session._resetIdleTimer is edge-triggered at the source today,
+   * but we don't want to depend on that invariant from a different module —
+   * if upstream ever re-emits current state (refactor, metadata refresh,
+   * resync), we still only push on the false→true edge as observed by us.
+   */
+  waitingState = /* @__PURE__ */ new Map();
   start() {
     this.sessionManager.on("session-added", (session) => {
       this._onSessionAdded(session);
@@ -2145,21 +2201,27 @@ var NotificationDispatcher = class {
     this.wiredSessions.delete(sessionId);
     this.pendingOutput.delete(sessionId);
     this.outputScheduled.delete(sessionId);
+    this.waitingState.delete(sessionId);
     this.registry.clearInputLock(sessionId);
   }
   _onSessionUpdated(sessionId, changes) {
     const msg = { type: "SESSION_UPDATED", sessionId, changes };
     this.registry.broadcastAll(msg);
-    if (changes.waitingForInput === true && this.pushService?.isEnabled) {
-      const session = this.sessionManager.getSession(sessionId);
-      const name = session?.info.name ?? "Claude";
-      this.pushService.sendToAll(
-        `${name} needs input`,
-        "Claude has finished its task and is waiting for your response.",
-        { sessionId }
-      ).catch((err) => {
-        logger_default.warn(`FCM push error: ${String(err)}`);
-      });
+    if (changes.waitingForInput !== void 0) {
+      const previous = this.waitingState.get(sessionId) ?? false;
+      const next = changes.waitingForInput === true;
+      this.waitingState.set(sessionId, next);
+      if (!previous && next && this.pushService?.isEnabled) {
+        const session = this.sessionManager.getSession(sessionId);
+        const name = session?.info.name ?? "Claude";
+        this.pushService.sendToAll(
+          `${name} needs input`,
+          "Claude has finished its task and is waiting for your response.",
+          { sessionId }
+        ).catch((err) => {
+          logger_default.warn(`FCM push error: ${String(err)}`);
+        });
+      }
     }
   }
 };
