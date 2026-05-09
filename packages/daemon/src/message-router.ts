@@ -229,7 +229,7 @@ export class MessageRouter {
       return;
     }
 
-    client.subscribedSessions.add(msg.sessionId);
+    registry.addSubscription(client.id, msg.sessionId);
     sessionManager.addClientToSession(msg.sessionId, client.id);
 
     if (msg.fromLine !== undefined) {
@@ -265,7 +265,7 @@ export class MessageRouter {
     client: ConnectedClient,
     msg: ClientMessage & { type: 'UNSUBSCRIBE' }
   ): void {
-    client.subscribedSessions.delete(msg.sessionId);
+    this.deps.registry.removeSubscription(client.id, msg.sessionId);
     this.deps.sessionManager.removeClientFromSession(msg.sessionId, client.id);
     logger.debug(`Client ${client.id} unsubscribed from session ${msg.sessionId}`);
   }

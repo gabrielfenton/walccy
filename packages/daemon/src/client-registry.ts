@@ -37,6 +37,11 @@ export const INPUT_LOCK_TTL_MS = 2000;
 export class ClientRegistry {
   private clients: Map<string, ConnectedClient> = new Map();
   private inputLocks: Map<string, InputLock> = new Map();
+  // Reverse index: sessionId → set of clientIds subscribed to it. Mirrors
+  // ConnectedClient.subscribedSessions so broadcastToSession is O(K subscribers)
+  // instead of O(N clients). Mutated only via addSubscription/removeSubscription
+  // (and remove() on disconnect) — keep the two indexes consistent.
+  private sessionSubscribers: Map<string, Set<string>> = new Map();
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -65,9 +70,17 @@ export class ClientRegistry {
       );
       return false;
     }
-    this.clients.delete(client.id);
+    const oldId = client.id;
+    this.clients.delete(oldId);
     client.id = newId;
     this.clients.set(client.id, client);
+    // Migrate any existing reverse-index entries from oldId → newId. In
+    // practice rebind runs during AUTH before the client SUBSCRIBEs, so this
+    // is usually a no-op — but staying consistent is cheap and safer.
+    for (const sessionId of client.subscribedSessions) {
+      this._untrackSubscription(oldId, sessionId);
+      this._trackSubscription(newId, sessionId);
+    }
     return true;
   }
 
@@ -78,9 +91,48 @@ export class ClientRegistry {
   remove(client: ConnectedClient): void {
     for (const sessionId of client.subscribedSessions) {
       this.sessionManager.removeClientFromSession(sessionId, client.id);
+      this._untrackSubscription(client.id, sessionId);
     }
+    client.subscribedSessions.clear();
     this.pushService?.unregisterClient(client.id);
     this.clients.delete(client.id);
+  }
+
+  // ────────── subscriptions ──────────
+  //
+  // Public mutation entry points for the per-client subscribedSessions set.
+  // External callers MUST use these (not client.subscribedSessions.add/delete
+  // directly) so the sessionSubscribers reverse index stays in sync.
+
+  addSubscription(clientId: string, sessionId: string): void {
+    const client = this.clients.get(clientId);
+    if (!client) return;
+    if (client.subscribedSessions.has(sessionId)) return;
+    client.subscribedSessions.add(sessionId);
+    this._trackSubscription(clientId, sessionId);
+  }
+
+  removeSubscription(clientId: string, sessionId: string): void {
+    const client = this.clients.get(clientId);
+    if (!client) return;
+    if (!client.subscribedSessions.delete(sessionId)) return;
+    this._untrackSubscription(clientId, sessionId);
+  }
+
+  private _trackSubscription(clientId: string, sessionId: string): void {
+    let subs = this.sessionSubscribers.get(sessionId);
+    if (!subs) {
+      subs = new Set();
+      this.sessionSubscribers.set(sessionId, subs);
+    }
+    subs.add(clientId);
+  }
+
+  private _untrackSubscription(clientId: string, sessionId: string): void {
+    const subs = this.sessionSubscribers.get(sessionId);
+    if (!subs) return;
+    subs.delete(clientId);
+    if (subs.size === 0) this.sessionSubscribers.delete(sessionId);
   }
 
   // ────────── input locks ──────────
@@ -127,18 +179,22 @@ export class ClientRegistry {
   }
 
   broadcastToSession(sessionId: string, msg: ServerMessage): void {
+    const subs = this.sessionSubscribers.get(sessionId);
+    if (!subs || subs.size === 0) return;
     const payload = JSON.stringify(msg);
-    for (const client of this.clients.values()) {
+    for (const clientId of subs) {
+      const client = this.clients.get(clientId);
       if (
-        client.isAuthenticated &&
-        client.subscribedSessions.has(sessionId) &&
-        client.ws.readyState === WebSocket.OPEN
+        !client ||
+        !client.isAuthenticated ||
+        client.ws.readyState !== WebSocket.OPEN
       ) {
-        try {
-          client.ws.send(payload);
-        } catch (err) {
-          logger.debug(`Session broadcast error to ${client.id}: ${String(err)}`);
-        }
+        continue;
+      }
+      try {
+        client.ws.send(payload);
+      } catch (err) {
+        logger.debug(`Session broadcast error to ${client.id}: ${String(err)}`);
       }
     }
   }
