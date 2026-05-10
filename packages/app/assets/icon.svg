@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Walccy icon — "Prompt & Cursor"
+  Chunky `>` chevron + block cursor `█`: the two most iconic CLI glyphs,
+  rendered bold on the brand near-black with a purple accent.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#0D0D0D"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" ry="200" fill="#141320"/>
+  <polyline points="200,260 488,512 200,764"
+            fill="none"
+            stroke="#7B61FF"
+            stroke-width="116"
+            stroke-linejoin="miter"
+            stroke-miterlimit="8"
+            stroke-linecap="round"/>
+  <rect x="588" y="372" width="280" height="280" rx="24" ry="24" fill="#7B61FF"/>
+</svg>

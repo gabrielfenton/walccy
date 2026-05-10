@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Walccy icon — "Prompt & Cursor"
+  A chunky `>` chevron paired with a solid block cursor `█`: the two most
+  iconic, instantly-legible terminal glyphs, rendered as bold geometric
+  shapes on the brand near-black with the Walccy purple accent.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Background -->
+  <rect width="1024" height="1024" fill="#0D0D0D"/>
+
+  <!-- Subtle rounded inner plate so the mark feels intentional, not floating.
+       Stays well outside the 720 safe zone visually but inside 1024. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" ry="200" fill="#141320"/>
+
+  <!-- The `>` chevron: tip on the right, opening left.
+       Tip at (560, 512). Arms terminate at (232, 248) and (232, 776).
+       Rendered as a thick stroked polyline (120px) with miter join for a
+       crisp, geometric point. Rounded line caps soften the open ends. -->
+  <polyline points="200,260 488,512 200,764"
+            fill="none"
+            stroke="#7B61FF"
+            stroke-width="116"
+            stroke-linejoin="miter"
+            stroke-miterlimit="8"
+            stroke-linecap="round"/>
+
+  <!-- Block cursor `█`: solid square set to the right of the chevron,
+       vertically centered on the chevron tip. Slight corner rounding to
+       match the plate, keeping the shape feeling crafted rather than raw. -->
+  <rect x="588" y="372" width="280" height="280" rx="24" ry="24" fill="#7B61FF"/>
+</svg>

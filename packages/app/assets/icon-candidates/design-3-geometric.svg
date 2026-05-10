@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Walccy mark: an isometric chamfered cube — three facets converging on
+  a single inner point, evoking a portal / handshake between two planes.
+  Single solid silhouette (rounded hexagon); inner facets are same-hue
+  tonal fills so the mono form holds. All content within 720 safe zone.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="topFacet" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#B8A4FF"/>
+      <stop offset="1" stop-color="#8468FF"/>
+    </linearGradient>
+    <linearGradient id="leftFacet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7B61FF"/>
+      <stop offset="1" stop-color="#4E36C8"/>
+    </linearGradient>
+    <linearGradient id="rightFacet" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5E45E0"/>
+      <stop offset="1" stop-color="#2E1E8A"/>
+    </linearGradient>
+    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F2ECFF"/>
+      <stop offset="0.55" stop-color="#C9B8FF"/>
+      <stop offset="1" stop-color="#7B61FF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1024" height="1024" fill="#0D0D0D"/>
+
+  <!--
+    Outer silhouette: a regular hexagon, point-up/point-down on the
+    sides, rendered with slight corner rounds. Center (512,512),
+    radius 360 → vertices at:
+      top    (512, 152)
+      tr     (823.77, 332)  ~= 512 + 360*cos30, 512 - 360*sin30
+      br     (823.77, 692)
+      bottom (512, 872)
+      bl     (200.23, 692)
+      tl     (200.23, 332)
+    Corner radius ~36px implemented via short cubic curves.
+  -->
+  <path d="
+    M 491.22 152.36
+    Q 512 140 532.78 152.36
+    L 803.00 320.00
+    Q 823.77 332 823.77 356.00
+    L 823.77 668.00
+    Q 823.77 692 803.00 704.00
+    L 532.78 871.64
+    Q 512 884 491.22 871.64
+    L 221.00 704.00
+    Q 200.23 692 200.23 668.00
+    L 200.23 356.00
+    Q 200.23 332 221.00 320.00
+    Z"
+    fill="#7B61FF"/>
+
+  <!-- Top facet (light) -->
+  <path d="
+    M 491.22 152.36
+    Q 512 140 532.78 152.36
+    L 803.00 320.00
+    Q 823.77 332 823.77 356.00
+    L 512 512
+    L 200.23 356.00
+    Q 200.23 332 221.00 320.00
+    Z"
+    fill="url(#topFacet)"/>
+
+  <!-- Left facet (mid) -->
+  <path d="
+    M 200.23 356.00
+    L 512 512
+    L 512 884
+    Q 512 884 491.22 871.64
+    L 221.00 704.00
+    Q 200.23 692 200.23 668.00
+    Z"
+    fill="url(#leftFacet)"/>
+
+  <!-- Right facet (dark) -->
+  <path d="
+    M 823.77 356.00
+    L 823.77 668.00
+    Q 823.77 692 803.00 704.00
+    L 532.78 871.64
+    Q 512 884 512 884
+    L 512 512
+    Z"
+    fill="url(#rightFacet)"/>
+
+  <!-- Seam highlights: three thick wedges along facet boundaries (>30px) -->
+  <!-- top seam (from top vertex down to center) -->
+  <path d="M 504 148 L 520 148 L 520 504 L 504 504 Z" fill="#E6DCFF" opacity="0.55"/>
+  <!-- left-down seam (top-left vertex to center) -->
+  <path d="
+    M 200.23 348
+    L 220 332
+    L 520 505
+    L 504 518
+    Z" fill="#E6DCFF" opacity="0.35"/>
+  <!-- right-down seam (top-right vertex to center) -->
+  <path d="
+    M 823.77 348
+    L 803 332
+    L 504 505
+    L 520 518
+    Z" fill="#1A0F4A" opacity="0.4"/>
+  <!-- bottom seam (center to bottom vertex) -->
+  <path d="M 504 510 L 520 510 L 520 876 L 504 876 Z" fill="#1A0F4A" opacity="0.5"/>
+
+  <!-- Central node: solid disk + glow, the "connection point" -->
+  <circle cx="512" cy="512" r="120" fill="url(#core)"/>
+  <circle cx="512" cy="512" r="48" fill="#FFFFFF"/>
+</svg>

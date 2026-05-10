@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Notification + Android 13+ themed icon: white-on-transparent silhouette. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <polyline points="200,260 488,512 200,764"
+            fill="none"
+            stroke="#FFFFFF"
+            stroke-width="116"
+            stroke-linejoin="miter"
+            stroke-miterlimit="8"
+            stroke-linecap="round"/>
+  <rect x="588" y="372" width="280" height="280" rx="24" ry="24" fill="#FFFFFF"/>
+</svg>
