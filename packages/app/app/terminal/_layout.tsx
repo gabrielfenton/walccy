@@ -6,7 +6,7 @@
 //   3. Stack navigator for session content
 // ──────────────────────────────────────────────
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -23,6 +23,43 @@ import { useConnectionStore, type ConnectionStatus } from '../../stores/connecti
 import { wsClient } from '../../services/ws-client';
 import { TabBar } from '../../components/sessions/TabBar';
 import { NewSessionSheet } from '../../components/sessions/NewSessionSheet';
+
+// ── Offline-too-long banner ───────────────────
+//
+// Surfaces under the header when the WS has been non-connected for
+// more than OFFLINE_GRACE_MS.  Brief disconnect/reconnect cycles
+// (idle drops, backgrounding) stay silent; only stuck-offline draws
+// attention.  The most common cause for a stuck phone is Tailscale
+// being toggled off, so the body text leads with that.
+
+const OFFLINE_GRACE_MS = 8000;
+
+const OfflineBanner: React.FC = () => {
+  const status = useConnectionStore((s) => s.status);
+  const [longOffline, setLongOffline] = useState(false);
+
+  useEffect(() => {
+    if (status === 'connected') {
+      setLongOffline(false);
+      return;
+    }
+    const t = setTimeout(() => setLongOffline(true), OFFLINE_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [status]);
+
+  if (!longOffline || status === 'connected') return null;
+
+  return (
+    <View style={styles.offlineBanner}>
+      <Text style={styles.offlineBannerTitle}>Can't reach the daemon</Text>
+      <Text style={styles.offlineBannerBody} numberOfLines={3}>
+        If you're off your home Wi-Fi, swipe down and tap the Tailscale tile
+        to bring the VPN up. Otherwise check that the daemon is running on
+        your computer.
+      </Text>
+    </View>
+  );
+};
 
 // ── Status badge ──────────────────────────────
 
@@ -137,6 +174,9 @@ export default function TerminalLayout(): React.ReactElement {
       {/* Header */}
       <HeaderBar />
 
+      {/* Stuck-offline hint */}
+      <OfflineBanner />
+
       {/* Tab bar */}
       <TabBar
         sessions={sessions}
@@ -166,6 +206,29 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+
+  // ── Offline banner ─────────────────────────
+
+  offlineBanner: {
+    backgroundColor: Colors.accentAmber + '22',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.accentAmber + '55',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  offlineBannerTitle: {
+    color: Colors.accentAmber,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: FontWeight.semiBold,
+    marginBottom: 2,
+  },
+  offlineBannerBody: {
+    color: Colors.textPrimary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    lineHeight: 16,
   },
 
   // ── Header bar ────────────────────────────
