@@ -12,6 +12,8 @@ export interface WalccyConfig {
   autoDetectInterval: number;
   logLevel: string;
   sessionNameStrategy: 'cwd-basename' | 'pid';
+  /** Hard cap on concurrent daemon-spawned sessions. 0 = unlimited. */
+  maxSpawnedSessions: number;
 }
 
 const DEFAULTS: WalccyConfig = {
@@ -23,6 +25,7 @@ const DEFAULTS: WalccyConfig = {
   autoDetectInterval: 3000,
   logLevel: 'info',
   sessionNameStrategy: 'cwd-basename',
+  maxSpawnedSessions: 8,
 };
 
 export function getConfigPath(): string {
@@ -51,15 +54,19 @@ export function loadConfig(): WalccyConfig {
   };
 
   // Auto-generate authSecret if missing or empty
+  let needsSave = false;
   if (!merged.authSecret) {
     merged.authSecret = crypto.randomBytes(32).toString('hex');
+    needsSave = true;
   }
 
-  // Always persist to disk (creates file + directory if needed)
-  if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
+  // Only persist if the config was newly created or a secret was generated
+  if (needsSave || !fs.existsSync(configPath)) {
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    saveConfig(merged);
   }
-  saveConfig(merged);
 
   return merged;
 }

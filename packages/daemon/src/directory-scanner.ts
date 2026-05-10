@@ -108,6 +108,8 @@ export class DirectoryScanner {
     if (!input || typeof input !== 'string') return null;
     const trimmed = input.trim();
     if (trimmed.length === 0) return null;
+    if (trimmed.length > 4096) return null;
+    if (trimmed.includes('\0')) return null;
 
     let expanded = trimmed;
     if (expanded === '~') {
@@ -117,13 +119,21 @@ export class DirectoryScanner {
     }
 
     const resolved = path.resolve(expanded);
-    if (!this.isUnderHome(resolved)) return null;
-    if (!this.isReadableDir(resolved)) return null;
-    return resolved;
+
+    let real: string;
+    try {
+      real = fs.realpathSync.native(resolved);
+    } catch {
+      return null;  // Broken symlink, dangling, or path doesn't exist.
+    }
+
+    if (!this.isUnderHome(real)) return null;
+    if (!this.isReadableDir(real)) return null;
+    return real;
   }
 
   /** True iff `p` is the user's home directory or a descendant. */
-  isUnderHome(p: string): boolean {
+  private isUnderHome(p: string): boolean {
     return p === this.homeDir || p.startsWith(this.homeDir + path.sep);
   }
 
@@ -135,7 +145,8 @@ export class DirectoryScanner {
     root: string,
     depth: number,
     seen: Set<string>,
-    out: DirectoryEntry[]
+    out: DirectoryEntry[],
+    visited: Set<string> = new Set<string>()
   ): void {
     if (depth > MAX_DEPTH) return;
     if (out.length >= MAX_RESULTS) return;
@@ -148,14 +159,24 @@ export class DirectoryScanner {
       return;
     }
 
-    let visited = 0;
+    let visitedCount = 0;
     for (const entry of entries) {
-      if (visited >= MAX_DIRS_PER_ROOT) break;
-      if (!entry.isDirectory()) continue;
+      if (visitedCount >= MAX_DIRS_PER_ROOT) break;
       if (entry.name.startsWith('.')) continue;
       if (entry.name === 'node_modules') continue;
 
       const full = path.join(root, entry.name);
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) continue; // skip symlinks entirely
+      if (!st.isDirectory()) continue;
+      const inode = `${st.dev}:${st.ino}`;
+      if (visited.has(inode)) continue;
+      visited.add(inode);
 
       // .git child → this dir is a repo.
       const gitDir = path.join(full, '.git');
@@ -178,10 +199,10 @@ export class DirectoryScanner {
         }
         // Don't recurse into the repo — submodules clutter the list.
       } else {
-        this.findGitRepos(full, depth + 1, seen, out);
+        this.findGitRepos(full, depth + 1, seen, out, visited);
       }
 
-      visited++;
+      visitedCount++;
       if (out.length >= MAX_RESULTS) return;
     }
   }

@@ -44,20 +44,25 @@ export async function getTailscaleIP(): Promise<string | null> {
 
 /**
  * Polls getTailscaleIP every `intervalMs` ms until it resolves.
- * Logs a warning on each failed attempt.
+ * Gives up after `maxRetries` attempts and throws an error.
  */
-export async function waitForTailscale(intervalMs = 10000): Promise<string> {
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+export async function waitForTailscale(
+  intervalMs = 10000,
+  maxRetries = 30
+): Promise<string> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     const ip = await getTailscaleIP();
     if (ip !== null) {
       return ip;
     }
     logger.warn(
-      `Tailscale not available yet — retrying in ${intervalMs / 1000}s`
+      `Tailscale not available yet — retrying in ${intervalMs / 1000}s (attempt ${attempt + 1}/${maxRetries})`
     );
     await delay(intervalMs);
   }
+  throw new Error(
+    `Tailscale not available after ${maxRetries} attempts (${(maxRetries * intervalMs) / 1000}s). Is tailscaled running?`
+  );
 }
 
 function delay(ms: number): Promise<void> {

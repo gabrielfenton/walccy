@@ -45,6 +45,10 @@ export interface ListSessionsMessage {
 export interface SubscribeMessage {
   type: 'SUBSCRIBE';
   sessionId: string;
+  /**
+   * When provided, the daemon replies with `RESUME` (append-style gap-fill)
+   * instead of `HISTORY` (replace-style snapshot).
+   */
   fromLine?: number;
 }
 
@@ -158,6 +162,15 @@ export interface HistoryMessage {
   firstAvailableLine: number;
 }
 
+export interface ResumeMessage {
+  type: 'RESUME';
+  sessionId: string;
+  /** Lines with index >= the SUBSCRIBE.fromLine the client supplied. */
+  lines: BufferedLine[];
+  /** Daemon's current totalLinesReceived after these lines. */
+  totalLines: number;
+}
+
 export interface OutputMessage {
   type: 'OUTPUT';
   sessionId: string;
@@ -218,6 +231,7 @@ export type ServerMessage =
   | SessionUpdatedMessage
   | SessionRemovedMessage
   | HistoryMessage
+  | ResumeMessage
   | OutputMessage
   | InputLockMessage
   | PongMessage

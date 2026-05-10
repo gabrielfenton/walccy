@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import * as path from 'path';
 import logger from './logger.js';
 
@@ -54,7 +55,7 @@ export class ProcessScanner extends EventEmitter {
 
     let entries: string[];
     try {
-      entries = fs.readdirSync('/proc');
+      entries = await fsp.readdir('/proc');
     } catch (err) {
       logger.error(`Cannot read /proc: ${String(err)}`);
       return;
@@ -64,14 +65,14 @@ export class ProcessScanner extends EventEmitter {
       const pid = parseInt(entry, 10);
       if (isNaN(pid) || pid <= 0) continue;
 
-      const isClaudeProcess = this.isClaude(pid);
+      const isClaudeProcess = await this.isClaude(pid);
       if (!isClaudeProcess) continue;
 
       currentPids.add(pid);
 
       if (!this.knownPids.has(pid)) {
         // New process found
-        const cwd = this.readCwd(pid);
+        const cwd = await this.readCwd(pid);
         if (cwd !== null) {
           logger.debug(`ProcessScanner: found claude pid=${pid} cwd=${cwd}`);
           this.knownPids.add(pid);
@@ -98,10 +99,10 @@ export class ProcessScanner extends EventEmitter {
    * Returns true if the process with `pid` is a `claude` process.
    * Reads /proc/{pid}/cmdline (null-byte separated argv).
    */
-  private isClaude(pid: number): boolean {
+  private async isClaude(pid: number): Promise<boolean> {
     const cmdlinePath = path.join('/proc', String(pid), 'cmdline');
     try {
-      const raw = fs.readFileSync(cmdlinePath, 'utf8');
+      const raw = await fsp.readFile(cmdlinePath, 'utf8');
       // cmdline entries are separated by null bytes
       const args = raw.split('\0').filter(Boolean);
       // Match the binary name 'claude' anywhere in args[0] (the executable path)
@@ -124,10 +125,10 @@ export class ProcessScanner extends EventEmitter {
    * Read the CWD of a process via /proc/{pid}/cwd symlink.
    * Returns null if not readable.
    */
-  private readCwd(pid: number): string | null {
+  private async readCwd(pid: number): Promise<string | null> {
     const cwdLink = path.join('/proc', String(pid), 'cwd');
     try {
-      return fs.readlinkSync(cwdLink);
+      return await fsp.readlink(cwdLink);
     } catch {
       return null;
     }
