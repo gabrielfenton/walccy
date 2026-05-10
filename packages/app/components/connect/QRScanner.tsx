@@ -37,6 +37,9 @@ const CORNER_SIZE = 24;
 const CORNER_THICKNESS = 3;
 const SCAN_BOX_SIZE = 240;
 
+// Matches a valid hostname, IPv4 address, or IPv6 address (no protocol, no path)
+const HOST_REGEX = /^[a-zA-Z0-9._-]+$/;
+
 function parsePairingData(raw: string): PairingData | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -53,11 +56,24 @@ function parsePairingData(raw: string): PairingData | null {
       return null;
     }
 
+    const host = obj['host'] as string;
+    const port = obj['port'] as number;
+    const secret = obj['secret'] as string;
+
+    // Validate host: must be a simple hostname or IP, no injection vectors
+    if (!host || !HOST_REGEX.test(host)) return null;
+
+    // Validate port: must be in valid range
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+
+    // Validate secret: must be a 64-character hex string (32 bytes)
+    if (!/^[0-9a-fA-F]{64}$/.test(secret)) return null;
+
     return {
       v:      obj['v'] as number,
-      host:   obj['host'] as string,
-      port:   obj['port'] as number,
-      secret: obj['secret'] as string,
+      host,
+      port,
+      secret,
       label:  obj['label'] as string,
     };
   } catch {

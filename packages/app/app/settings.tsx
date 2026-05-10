@@ -201,6 +201,7 @@ export default function SettingsScreen(): React.ReactElement {
     keepScreenOn,
     vibrationOnWaitingInput,
     showClipboardPopupOnCopy,
+    lowPowerMode,
     updateSettings,
   } = useSettingsStore(
     useShallow((s) => ({
@@ -212,6 +213,7 @@ export default function SettingsScreen(): React.ReactElement {
       keepScreenOn: s.keepScreenOn,
       vibrationOnWaitingInput: s.vibrationOnWaitingInput,
       showClipboardPopupOnCopy: s.showClipboardPopupOnCopy,
+      lowPowerMode: s.lowPowerMode,
       updateSettings: s.updateSettings,
     }))
   );
@@ -240,10 +242,17 @@ export default function SettingsScreen(): React.ReactElement {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => router.back()}
-          activeOpacity={0.75}
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace('/terminal/no-session');
+            }
+          }}
+          activeOpacity={0.6}
           accessibilityRole="button"
           accessibilityLabel="Back"
+          hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
         >
           <Text style={styles.backButtonText}>‹ Back</Text>
         </TouchableOpacity>
@@ -326,6 +335,24 @@ export default function SettingsScreen(): React.ReactElement {
           />
         </View>
 
+        {/* ── Network ─────────────────────────── */}
+        <SectionHeader title="Network" />
+        <View style={styles.card}>
+          <ToggleRow
+            label="Low-Power Mode"
+            value={lowPowerMode}
+            onValueChange={(v) => {
+              updateSettings({ lowPowerMode: v });
+              wsClient.applyLowPowerMode(v);
+            }}
+          />
+          <View style={styles.cardFooter}>
+            <Text style={styles.cardFooterText}>
+              Drops the persistent notification and lets Android suspend the app in the background. You'll only get push alerts when Claude needs input — live output resumes when you reopen the app. Recommended for cellular data.
+            </Text>
+          </View>
+        </View>
+
         {/* ── About ───────────────────────────── */}
         <SectionHeader title="About" />
         <View style={styles.card}>
@@ -375,9 +402,12 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   backButton: {
-    paddingVertical: 8,
-    paddingRight: 12,
-    minWidth: 64,
+    paddingVertical: 12,
+    paddingLeft: 4,
+    paddingRight: 16,
+    minHeight: 44,
+    minWidth: 72,
+    justifyContent: 'center',
   },
   backButtonText: {
     color: Colors.accent,
@@ -422,7 +452,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-
   // ── Card ──────────────────────────────────
 
   card: {
@@ -432,6 +461,19 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     overflow: 'hidden',
     marginBottom: 12,
+  },
+  cardFooter: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+    backgroundColor: Colors.surfaceHigh,
+  },
+  cardFooterText: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    lineHeight: 17,
   },
 
   // ── Row ───────────────────────────────────

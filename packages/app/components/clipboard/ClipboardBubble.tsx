@@ -23,6 +23,8 @@ interface ClipboardBubbleProps {
   isVisible: boolean;
   onPaste: () => void;
   onDismiss: () => void;
+  /** Optional long-press handler — opens the clipboard history sheet. */
+  onLongPress?: () => void;
 }
 
 // ──────────────────────────────────────────────
@@ -33,6 +35,7 @@ export function ClipboardBubble({
   isVisible,
   onPaste,
   onDismiss,
+  onLongPress,
 }: ClipboardBubbleProps): React.ReactElement | null {
   const opacity = useSharedValue(0);
   const translateY = useSharedValue(12);
@@ -62,9 +65,12 @@ export function ClipboardBubble({
       <TouchableOpacity
         style={styles.pill}
         onPress={handlePress}
+        onLongPress={onLongPress}
+        delayLongPress={350}
         activeOpacity={0.75}
         accessibilityRole="button"
-        accessibilityLabel="Paste clipboard content to terminal"
+        accessibilityLabel="Paste clipboard content to terminal. Long-press for history."
+        accessibilityHint="Long-press to open the clipboard history sheet."
       >
         <Text style={styles.label}>📋 Paste</Text>
       </TouchableOpacity>

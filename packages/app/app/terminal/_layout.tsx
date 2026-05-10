@@ -240,15 +240,15 @@ const styles = StyleSheet.create({
   },
 
   settingsButton: {
-    width: 32,
-    height: 32,
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
   settingsIcon: {
     color: Colors.textSecondary,
-    fontSize: 18,
+    fontSize: 20,
   },
 
   // ── Content area ──────────────────────────

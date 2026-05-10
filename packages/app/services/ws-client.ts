@@ -1,5 +1,8 @@
 // ──────────────────────────────────────────────
 // Walccy — WebSocket client service
+// Thin orchestrator over modular collaborators (PendingRequests,
+// ReconnectController, PingWatchdog, PowerPolicy). Public API is
+// stable — see grep('wsClient.') for call sites.
 // ──────────────────────────────────────────────
 
 import { MMKV } from 'react-native-mmkv';
@@ -20,6 +23,10 @@ import { settingsStore } from '../stores/settings.store';
 import { scheduleLocalNotification } from './notification.service';
 import { getPushToken } from './push-token';
 import type { ServerMessage, DirectoryEntry } from '@walccy/protocol';
+import { PendingRequests } from './ws/PendingRequests';
+import { ReconnectController } from './ws/ReconnectController';
+import { PingWatchdog } from './ws/PingWatchdog';
+import { PowerPolicy } from './ws/PowerPolicy';
 
 // ──────────────────────────────────────────────
 // Persistent client identity
@@ -33,21 +40,81 @@ if (!_clientId) {
 }
 const PERSISTENT_CLIENT_ID: string = _clientId;
 
+const DIRECTORY_LIST_KEY = 'directory-list';
+const RECONNECT_MAX_ATTEMPTS = 12;
+
 // ──────────────────────────────────────────────
 // WsClient
 // ──────────────────────────────────────────────
 
 class WsClient {
   private ws: WebSocket | null = null;
-  private reconnectAttempt = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private pingInterval: ReturnType<typeof setInterval> | null = null;
-  private pingTimeout: ReturnType<typeof setTimeout> | null = null;
-  private pingSentAt = 0;
   private authTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingSentAt = 0;
+
+  private readonly clientId: string = PERSISTENT_CLIENT_ID;
+  private readonly clientName: string = 'Walccy Mobile';
+
+  private currentHost: string | null = null;
+  private currentPort: number | null = null;
+  private currentSecret: string | null = null;
+
+  /** Sessions we should be subscribed to (survives reconnects). Value unused. */
+  private activeSubscriptions: Map<string, number | undefined> = new Map();
+
+  /** Highest line index we've delivered to the buffer per session. */
+  private lastSeenIndex: Map<string, number> = new Map();
+
+  /** Last successfully registered FCM token, for debounce. */
+  private lastFcmTokenRegistered: string | null = null;
+
+  private pendingSpawns = new PendingRequests<string>();
+  private pendingDirectoryListing = new PendingRequests<DirectoryEntry[]>();
+
+  private reconnect: ReconnectController;
+  private ping: PingWatchdog;
+  private power: PowerPolicy;
 
   /** Listeners registered via onMessage() */
   private messageListeners: Set<(msg: ServerMessage) => void> = new Set();
+
+  constructor() {
+    this.reconnect = new ReconnectController({
+      delays: WS_RECONNECT_DELAYS,
+      jitter: WS_RECONNECT_JITTER,
+      maxAttempts: RECONNECT_MAX_ATTEMPTS,
+      isOnline: () => networkStatus.isOnline(),
+      onceOnline: (cb) => networkStatus.onceOnline(cb),
+      openSocket: () => this.openSocket(),
+      setStatus: (status) => connectionStore.getState().setStatus(status),
+      onCircuitBreak: () => {
+        connectionStore.getState().setDisconnected('reconnect_exhausted');
+      },
+    });
+
+    this.ping = new PingWatchdog({
+      interval: PING_INTERVAL,
+      timeout: PING_TIMEOUT,
+      isSocketOpen: () => !!this.ws && this.ws.readyState === WebSocket.OPEN,
+      sendPing: () => {
+        this.pingSentAt = Date.now();
+        this.send({ type: 'PING' });
+      },
+      onTimeout: () => {
+        console.warn('[WsClient] Ping timeout — treating as disconnected');
+        this.clearAuthTimeout();
+        this.closeSocketSilently();
+        this.ping.stop();
+        connectionStore.getState().setDisconnected('Ping timeout');
+        this.reconnect.schedule();
+      },
+    });
+
+    this.power = new PowerPolicy({
+      isLowPowerMode: () => settingsStore.getState().lowPowerMode,
+      foregroundService,
+    });
+  }
 
   /**
    * Register a listener for all incoming ServerMessages.
@@ -58,168 +125,120 @@ class WsClient {
     return () => this.messageListeners.delete(listener);
   }
 
-  /** Persistent UUID for this device */
-  private readonly clientId: string = PERSISTENT_CLIENT_ID;
-  /** Human-readable device name */
-  private readonly clientName: string = 'Walccy Mobile';
-
-  private currentHost: string | null = null;
-  private currentPort: number | null = null;
-  private currentSecret: string | null = null;
-
-  /** Sessions we should be subscribed to (survives reconnects) */
-  private activeSubscriptions: Map<string, number | undefined> = new Map();
-
-  /** Pending SPAWN_SESSION requests, keyed by requestId. */
-  private pendingSpawns: Map<
-    string,
-    { resolve: (sessionId: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
-  > = new Map();
-
-  /** Pending LIST_DIRECTORIES request — at most one in flight. */
-  private pendingDirectoryListing: {
-    resolve: (entries: DirectoryEntry[]) => void;
-    reject: (err: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  } | null = null;
-
   // ── Public API ────────────────────────────────
 
   connect(host: string, port: number, secret: string): void {
-    // Cancel any pending reconnect
-    this.clearReconnectTimer();
-
-    // Close existing socket silently
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.close();
-      this.ws = null;
-    }
+    this.reconnect.cancel();
+    this.reconnect.reset();
+    this.closeSocketSilently();
 
     this.currentHost = host;
     this.currentPort = port;
     this.currentSecret = secret;
-    this.reconnectAttempt = 0;
 
-    // Start the Android foreground service so the OS keeps us alive
-    // while in the background. Skipped when the user has enabled
-    // low-power mode (cellular / metered networks). No-op on iOS or
-    // when the native module isn't installed yet.
-    if (!settingsStore.getState().lowPowerMode) {
-      foregroundService.start({ host, port }).catch((err) => {
-        console.warn('[WsClient] Foreground service start failed:', err);
-      });
-    }
+    this.power.onConnect(host, port);
 
     connectionStore.getState().setStatus('connecting');
     this.openSocket();
   }
 
   disconnect(): void {
-    this.reconnectAttempt = 0;
-    this.clearReconnectTimer();
-    this.stopPing();
+    this.reconnect.cancel();
+    this.reconnect.reset();
+    this.ping.stop();
+    this.clearAuthTimeout();
     this.activeSubscriptions.clear();
-    this.rejectPending(new Error('Disconnected'));
+    this.lastSeenIndex.clear();
+    this.rejectAllPending(new Error('Disconnected'));
 
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.close();
-      this.ws = null;
-    }
+    this.closeSocketSilently();
 
-    foregroundService.stop().catch(() => {});
+    this.power.onDisconnect();
 
     connectionStore.getState().setDisconnected();
   }
 
-  /** Send keyboard input to a session */
+  /** Manual retry after the circuit-breaker has tripped. */
+  retry(): void {
+    if (!this.currentHost || !this.currentPort || !this.currentSecret) return;
+    this.reconnect.reset();
+    connectionStore.getState().setStatus('connecting');
+    this.openSocket();
+  }
+
   sendInput(sessionId: string, data: string): void {
     this.send({ type: 'INPUT', sessionId, data });
   }
 
-  /** Subscribe to a session's live output stream */
   subscribe(sessionId: string, fromLine?: number): void {
     this.activeSubscriptions.set(sessionId, fromLine);
     this.send({ type: 'SUBSCRIBE', sessionId, ...(fromLine !== undefined ? { fromLine } : {}) });
   }
 
-  /** Unsubscribe from a session */
   unsubscribe(sessionId: string): void {
     this.activeSubscriptions.delete(sessionId);
+    this.lastSeenIndex.delete(sessionId);
     this.send({ type: 'UNSUBSCRIBE', sessionId });
   }
 
-  /** Send a terminal resize event */
   sendResize(sessionId: string, cols: number, rows: number): void {
     this.send({ type: 'RESIZE', sessionId, cols, rows });
   }
 
-  /** Request the full session list from the daemon */
   listSessions(): void {
     this.send({ type: 'LIST_SESSIONS' });
   }
 
   /**
-   * Sync the foreground-service state with the user's low-power-mode toggle.
-   * Call this when the toggle flips so the change takes effect without
-   * needing to disconnect/reconnect.
+   * Sync foreground-service state with the user's low-power-mode toggle.
    */
-  applyLowPowerMode(lowPowerMode: boolean): void {
-    if (lowPowerMode) {
-      foregroundService.stop().catch(() => {});
-    } else if (this.currentHost && this.currentPort) {
-      foregroundService.start({ host: this.currentHost, port: this.currentPort }).catch(() => {});
-    }
+  applyLowPowerMode(_lowPowerMode: boolean): void {
+    const connected =
+      this.currentHost && this.currentPort
+        ? { host: this.currentHost, port: this.currentPort }
+        : null;
+    this.power.onPolicyChange(connected);
   }
 
-  /**
-   * Ask the daemon for a directory suggestion list (recent cwds + git repos).
-   * Resolves with the entries, or rejects on timeout / disconnect.
-   */
   listDirectories(query?: string, timeoutMs = 8000): Promise<DirectoryEntry[]> {
-    // Cancel any prior pending request
-    if (this.pendingDirectoryListing) {
-      clearTimeout(this.pendingDirectoryListing.timer);
-      this.pendingDirectoryListing.reject(new Error('Superseded by newer listDirectories'));
-      this.pendingDirectoryListing = null;
-    }
-
-    return new Promise<DirectoryEntry[]>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.pendingDirectoryListing) {
-          this.pendingDirectoryListing = null;
-          reject(new Error('Timed out waiting for directory list'));
-        }
-      }, timeoutMs);
-      this.pendingDirectoryListing = { resolve, reject, timer };
-      this.send({ type: 'LIST_DIRECTORIES', ...(query ? { query } : {}) });
+    // Single-flight: cancel any prior request before issuing the new one.
+    this.pendingDirectoryListing.rejectAll(
+      new Error('Superseded by newer listDirectories')
+    );
+    const { promise } = this.pendingDirectoryListing.send<DirectoryEntry[]>({
+      requestId: DIRECTORY_LIST_KEY,
+      timeoutMs,
     });
+    this.send({ type: 'LIST_DIRECTORIES', ...(query ? { query } : {}) });
+    return promise;
   }
 
-  /**
-   * Spawn a new claude session on the daemon at the given cwd.
-   * Resolves with the new sessionId, or rejects on timeout / failure.
-   */
   spawnSession(cwd: string, timeoutMs = 15000): Promise<string> {
     const requestId = uuid();
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.pendingSpawns.delete(requestId)) {
-          reject(new Error('Timed out spawning session'));
-        }
-      }, timeoutMs);
-      this.pendingSpawns.set(requestId, { resolve, reject, timer });
-      this.send({ type: 'SPAWN_SESSION', cwd, requestId });
+    const { promise } = this.pendingSpawns.send<string>({
+      requestId,
+      timeoutMs,
     });
+    this.send({ type: 'SPAWN_SESSION', cwd, requestId });
+    return promise;
   }
 
   // ── Private helpers ───────────────────────────
 
+  private closeSocketSilently(): void {
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      try { this.ws.close(); } catch { /* ignore */ }
+      this.ws = null;
+    }
+  }
+
   private openSocket(): void {
     if (!this.currentHost || !this.currentPort || !this.currentSecret) return;
+
+    // Always start fresh: any prior auth timer or socket is stale.
+    this.clearAuthTimeout();
 
     const url = `ws://${this.currentHost}:${this.currentPort}`;
     try {
@@ -227,8 +246,6 @@ class WsClient {
       this.ws = ws;
 
       ws.onopen = () => {
-        this.reconnectAttempt = 0;
-        // Authenticate immediately
         this.send({
           type: 'AUTH',
           secret: this.currentSecret!,
@@ -236,17 +253,12 @@ class WsClient {
           clientName: this.clientName,
         });
 
-        // Enforce auth timeout — if no AUTH_OK/AUTH_FAIL arrives, close
         this.authTimeoutTimer = setTimeout(() => {
           console.warn('[WsClient] Auth timeout — no response from daemon');
-          if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.onerror = null;
-            this.ws.close();
-            this.ws = null;
-          }
+          this.clearAuthTimeout();
+          this.closeSocketSilently();
           connectionStore.getState().setDisconnected('Auth timeout');
-          this.reconnect();
+          this.reconnect.schedule();
         }, AUTH_TIMEOUT);
       };
 
@@ -259,13 +271,15 @@ class WsClient {
       };
 
       ws.onclose = () => {
-        this.stopPing();
+        this.clearAuthTimeout();
+        this.ping.stop();
         connectionStore.getState().setDisconnected('Connection lost');
-        this.reconnect();
+        this.reconnect.schedule();
       };
     } catch (err) {
+      this.clearAuthTimeout();
       connectionStore.getState().setDisconnected(String(err));
-      this.reconnect();
+      this.reconnect.schedule();
     }
   }
 
@@ -278,7 +292,6 @@ class WsClient {
       return;
     }
 
-    // Notify all registered listeners before processing
     for (const listener of Array.from(this.messageListeners)) {
       try {
         listener(msg);
@@ -290,44 +303,39 @@ class WsClient {
     switch (msg.type) {
       case 'AUTH_OK': {
         this.clearAuthTimeout();
+        this.reconnect.reset();
         connectionStore.getState().setConnected(
           this.currentHost!,
           this.currentPort!,
           this.currentHost!,
           msg.daemonVersion
         );
-        this.startPing();
-        // Immediately fetch session list
+        this.ping.start();
         this.listSessions();
-        // Re-subscribe to any sessions from a previous connection.
-        // Resume from the highest line index we've already received so the
-        // daemon only ships the gap — critical on flaky connections that
-        // drop and reconnect mid-session.
-        const buffers = outputStore.getState().buffers;
+        // Re-subscribe using the index cursor so the daemon ships only the
+        // gap (RESUME) instead of replacing scrollback (HISTORY).
         for (const sessionId of Array.from(this.activeSubscriptions.keys())) {
-          const buf = buffers[sessionId];
-          const resumeFromLine = buf?.totalLines ?? this.activeSubscriptions.get(sessionId);
-          // Update our cached cursor so a future reconnect resumes correctly.
-          this.activeSubscriptions.set(sessionId, resumeFromLine);
+          const cursor = this.lastSeenIndex.get(sessionId);
+          const fromLine = cursor !== undefined ? cursor + 1 : undefined;
+          this.activeSubscriptions.set(sessionId, fromLine);
           this.send({
             type: 'SUBSCRIBE',
             sessionId,
-            ...(resumeFromLine !== undefined ? { fromLine: resumeFromLine } : {}),
+            ...(fromLine !== undefined ? { fromLine } : {}),
           });
         }
-        // Register push token for FCM notifications
         this.registerPushToken();
         break;
       }
 
       case 'AUTH_FAIL': {
         this.clearAuthTimeout();
+        this.reconnect.cancel();
+        this.rejectAllPending(new Error(msg.reason ?? 'Authentication failed'));
         connectionStore.getState().setDisconnected(msg.reason ?? 'Authentication failed');
-        // Don't reconnect on auth failure
-        this.clearReconnectTimer();
         if (this.ws) {
           this.ws.onclose = null;
-          this.ws.close();
+          try { this.ws.close(); } catch { /* ignore */ }
           this.ws = null;
         }
         break;
@@ -344,7 +352,6 @@ class WsClient {
       }
 
       case 'SESSION_UPDATED': {
-        // Detect waitingForInput transition (false → true) to fire notification
         if (msg.changes.waitingForInput === true) {
           const prev = sessionsStore.getState().sessions[msg.sessionId];
           if (prev && !prev.waitingForInput) {
@@ -366,9 +373,8 @@ class WsClient {
 
       case 'HISTORY': {
         outputStore.getState().setHistory(msg.sessionId, msg.lines, msg.totalLines);
-        // Detect scrollback truncation: if the daemon's oldest available
-        // line is past the cursor we asked to resume from, the ring buffer
-        // wrapped while we were disconnected. Surface the gap to the user.
+        this.bumpLastSeen(msg.sessionId, msg.lines);
+        // Detect scrollback truncation.
         const requestedFrom = this.activeSubscriptions.get(msg.sessionId);
         if (
           typeof requestedFrom === 'number' &&
@@ -381,24 +387,26 @@ class WsClient {
         break;
       }
 
+      case 'RESUME': {
+        outputStore.getState().appendResume(msg.sessionId, msg.lines, msg.totalLines);
+        this.bumpLastSeen(msg.sessionId, msg.lines);
+        break;
+      }
+
       case 'OUTPUT': {
         outputStore.getState().appendLines(msg.sessionId, msg.lines);
+        this.bumpLastSeen(msg.sessionId, msg.lines);
         break;
       }
 
       case 'PONG': {
         const latency = Date.now() - this.pingSentAt;
         connectionStore.getState().setLatency(latency);
-        // Clear the pong-timeout watchdog
-        if (this.pingTimeout) {
-          clearTimeout(this.pingTimeout);
-          this.pingTimeout = null;
-        }
+        this.ping.notePongReceived(latency);
         break;
       }
 
       case 'INPUT_LOCK': {
-        // Informational — future UI will surface this
         break;
       }
 
@@ -408,144 +416,62 @@ class WsClient {
       }
 
       case 'DIRECTORY_LIST': {
-        if (this.pendingDirectoryListing) {
-          clearTimeout(this.pendingDirectoryListing.timer);
-          this.pendingDirectoryListing.resolve(msg.directories);
-          this.pendingDirectoryListing = null;
-        }
+        this.pendingDirectoryListing.resolve(DIRECTORY_LIST_KEY, msg.directories);
         break;
       }
 
       case 'SPAWN_RESULT': {
-        const pending = this.pendingSpawns.get(msg.requestId);
-        if (pending) {
-          clearTimeout(pending.timer);
-          this.pendingSpawns.delete(msg.requestId);
-          if (msg.sessionId) {
-            pending.resolve(msg.sessionId);
-          } else {
-            pending.reject(new Error(msg.error ?? 'Spawn failed'));
-          }
+        if (msg.sessionId) {
+          this.pendingSpawns.resolve(msg.requestId, msg.sessionId);
+        } else {
+          this.pendingSpawns.reject(msg.requestId, new Error(msg.error ?? 'Spawn failed'));
         }
         break;
       }
 
       default: {
-        // Exhaustive check — TypeScript will flag unhandled cases
         const _exhaustive: never = msg;
         console.warn('[WsClient] Unknown message type:', _exhaustive);
       }
     }
   }
 
-  private reconnect(): void {
-    if (!this.currentHost || !this.currentPort || !this.currentSecret) return;
-
-    // Don't burn battery and data spamming retries when the OS knows
-    // we have no network. Park here and let the NetInfo listener kick
-    // us back into action when the link returns.
-    if (!networkStatus.isOnline()) {
-      connectionStore.getState().setStatus('connecting');
-      networkStatus.onceOnline(() => {
-        // Reset attempt count so the first try after reconnect is fast.
-        this.reconnectAttempt = 0;
-        this.openSocket();
-      });
-      return;
+  private bumpLastSeen(sessionId: string, lines: { index: number }[]): void {
+    if (lines.length === 0) return;
+    let max = this.lastSeenIndex.get(sessionId) ?? -1;
+    for (const l of lines) {
+      if (l.index > max) max = l.index;
     }
-
-    const delays = WS_RECONNECT_DELAYS;
-    const base = delays[Math.min(this.reconnectAttempt, delays.length - 1)] ?? delays[delays.length - 1]!;
-    // Symmetric jitter: ±WS_RECONNECT_JITTER (e.g. ±25%) of the base delay.
-    const jitter = base * WS_RECONNECT_JITTER * (Math.random() * 2 - 1);
-    const delay = Math.max(500, Math.round(base + jitter));
-    this.reconnectAttempt++;
-
-    connectionStore.getState().setStatus('connecting');
-
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.openSocket();
-    }, delay);
+    this.lastSeenIndex.set(sessionId, max);
   }
 
   private registerPushToken(): void {
     getPushToken()
       .then((result) => {
-        if (result) {
-          this.send({
-            type: 'REGISTER_PUSH_TOKEN',
-            token: result.token,
-            platform: result.platform,
-          });
-          console.log(`[WsClient] Push token registered (${result.platform})`);
-        }
+        if (!result) return;
+        if (result.token === this.lastFcmTokenRegistered) return;
+        this.send({
+          type: 'REGISTER_PUSH_TOKEN',
+          token: result.token,
+          platform: result.platform,
+        });
+        this.lastFcmTokenRegistered = result.token;
+        console.log(`[WsClient] Push token registered (${result.platform})`);
       })
       .catch((err) => {
         console.warn('[WsClient] Failed to register push token:', err);
       });
   }
 
-  private rejectPending(err: Error): void {
-    for (const [id, pending] of Array.from(this.pendingSpawns.entries())) {
-      clearTimeout(pending.timer);
-      pending.reject(err);
-      this.pendingSpawns.delete(id);
-    }
-    if (this.pendingDirectoryListing) {
-      clearTimeout(this.pendingDirectoryListing.timer);
-      this.pendingDirectoryListing.reject(err);
-      this.pendingDirectoryListing = null;
-    }
+  private rejectAllPending(err: Error): void {
+    this.pendingSpawns.rejectAll(err);
+    this.pendingDirectoryListing.rejectAll(err);
   }
 
   private clearAuthTimeout(): void {
     if (this.authTimeoutTimer) {
       clearTimeout(this.authTimeoutTimer);
       this.authTimeoutTimer = null;
-    }
-  }
-
-  private clearReconnectTimer(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-  }
-
-  private startPing(): void {
-    this.stopPing();
-    this.pingInterval = setInterval(() => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-
-      this.pingSentAt = Date.now();
-      this.send({ type: 'PING' });
-
-      // If no PONG arrives within PING_TIMEOUT, treat as disconnected.
-      // The longer window (15s) avoids spurious drops on jittery cellular.
-      this.pingTimeout = setTimeout(() => {
-        console.warn('[WsClient] Ping timeout — treating as disconnected');
-        if (this.ws) {
-          this.ws.onclose = null;
-          this.ws.onerror = null;
-          this.ws.close();
-          this.ws = null;
-        }
-        this.stopPing();
-        connectionStore.getState().setDisconnected('Ping timeout');
-        this.reconnect();
-      }, PING_TIMEOUT);
-    }, PING_INTERVAL);
-  }
-
-  private stopPing(): void {
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval);
-      this.pingInterval = null;
-    }
-    if (this.pingTimeout) {
-      clearTimeout(this.pingTimeout);
-      this.pingTimeout = null;
     }
   }
 

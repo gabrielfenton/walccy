@@ -12,7 +12,7 @@ export const Colors = {
   accentRed:      '#FF4D4D',
   accentAmber:    '#FFB347',
   textPrimary:    '#EDEDED',
-  textSecondary:  '#888888',
+  textSecondary:  '#A0A0A0',
   textMono:       '#CDD6F4',
 } as const;
 

@@ -1,48 +1,27 @@
 // ──────────────────────────────────────────────
 // Walccy — ClipboardPopup
 // Modal bottom sheet that appears on terminal text long-press.
+// Uses the ActionSheet primitive so all the action surfaces in the
+// app share one visual + behavioural language.
 // ──────────────────────────────────────────────
 
-import React, { useEffect, useRef } from 'react';
-import {
-  Alert,
-  Animated,
-  Dimensions,
-  Modal,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  TouchableWithoutFeedback,
-  View,
-} from 'react-native';
-import * as Clipboard from 'expo-clipboard';
-import { wsClient } from '../../services/ws-client';
-import { Colors } from '../../constants/colors';
-import { FontFamily, FontSize } from '../../constants/typography';
-
-// ──────────────────────────────────────────────
-// Props
-// ──────────────────────────────────────────────
+import React, { useMemo } from 'react';
+import { ActionSheet, type ActionSheetItem } from '../ui/ActionSheet';
+import { useClipboardActions } from '../../hooks/useClipboardActions';
 
 interface ClipboardPopupProps {
   isVisible: boolean;
   selectedText: string;
   activeSessionId: string | null;
+  /**
+   * Owned-session ids. Kept for API compat with the caller, but the hook
+   * derives the same list internally — we only use this prop to decide
+   * whether to show the "Paste to ALL" multi-target action.
+   */
   allSessionIds: string[];
   onClose: () => void;
   onSaveToPromptLibrary: (text: string) => void;
 }
-
-// ──────────────────────────────────────────────
-// Constants
-// ──────────────────────────────────────────────
-
-const SHEET_HEIGHT = 260;
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-
-// ──────────────────────────────────────────────
-// Component
-// ──────────────────────────────────────────────
 
 export function ClipboardPopup({
   isVisible,
@@ -52,171 +31,57 @@ export function ClipboardPopup({
   onClose,
   onSaveToPromptLibrary,
 }: ClipboardPopupProps): React.ReactElement {
-  const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
+  const { pasteToActive, pasteToTargets, copyToSystem } =
+    useClipboardActions(activeSessionId);
 
-  useEffect(() => {
-    if (isVisible) {
-      Animated.spring(translateY, {
-        toValue: 0,
-        tension: 65,
-        friction: 11,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      Animated.timing(translateY, {
-        toValue: SHEET_HEIGHT,
-        duration: 220,
-        useNativeDriver: true,
-      }).start();
+  // Show up to 120 chars in the title slot — ActionSheet caps to 3 lines.
+  const previewText =
+    selectedText.length > 120 ? selectedText.slice(0, 120) + '…' : selectedText;
+
+  const actions = useMemo<ActionSheetItem[]>(() => {
+    const items: ActionSheetItem[] = [
+      {
+        label: 'Paste to this terminal',
+        iconName: 'send',
+        style: 'primary',
+        onPress: () => pasteToActive(selectedText),
+      },
+    ];
+    if (allSessionIds.length > 1) {
+      items.push({
+        label: `Paste to ALL terminals (${allSessionIds.length})`,
+        iconName: 'send',
+        onPress: () => pasteToTargets(selectedText, allSessionIds),
+      });
     }
-  }, [isVisible, translateY]);
-
-  const truncatedText =
-    selectedText.length > 40
-      ? selectedText.slice(0, 40) + '…'
-      : selectedText;
-
-  // ── Action handlers ───────────────────────────
-
-  const handlePasteToThis = () => {
-    if (activeSessionId) {
-      wsClient.sendInput(activeSessionId, selectedText);
-    }
-    onClose();
-  };
-
-  const handlePasteToAll = () => {
-    allSessionIds.forEach((id) => wsClient.sendInput(id, selectedText));
-    const count = allSessionIds.length;
-    onClose();
-    Alert.alert('Sent', `Sent to ${count} terminal${count !== 1 ? 's' : ''}`);
-  };
-
-  const handleSaveToPromptLibrary = () => {
-    onSaveToPromptLibrary(selectedText);
-    onClose();
-  };
-
-  const handleCopyToClipboard = async () => {
-    await Clipboard.setStringAsync(selectedText);
-    onClose();
-  };
-
-  // ─────────────────────────────────────────────
+    items.push({
+      label: 'Save to Prompt Library',
+      iconName: 'bookmark',
+      onPress: () => onSaveToPromptLibrary(selectedText),
+    });
+    items.push({
+      label: 'Copy to system clipboard',
+      iconName: 'copy',
+      onPress: () => {
+        void copyToSystem(selectedText);
+      },
+    });
+    return items;
+  }, [
+    selectedText,
+    allSessionIds,
+    pasteToActive,
+    pasteToTargets,
+    copyToSystem,
+    onSaveToPromptLibrary,
+  ]);
 
   return (
-    <Modal
-      visible={isVisible}
-      transparent
-      animationType="none"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      {/* Backdrop */}
-      <TouchableWithoutFeedback onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
-        <View style={styles.backdrop} />
-      </TouchableWithoutFeedback>
-
-      {/* Sheet */}
-      <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerText} numberOfLines={1}>
-            📋 "{truncatedText}"
-          </Text>
-        </View>
-
-        {/* Actions */}
-        <TouchableOpacity
-          style={[styles.row, styles.rowBorder]}
-          onPress={handlePasteToThis}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-        >
-          <Text style={styles.rowText}>Paste to this terminal</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.row, styles.rowBorder]}
-          onPress={handlePasteToAll}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-        >
-          <Text style={styles.rowText}>Paste to ALL terminals</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.row, styles.rowBorder]}
-          onPress={handleSaveToPromptLibrary}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-        >
-          <Text style={styles.rowText}>Save to Prompt Library</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.row}
-          onPress={handleCopyToClipboard}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-        >
-          <Text style={styles.rowText}>Copy to system clipboard</Text>
-        </TouchableOpacity>
-      </Animated.View>
-    </Modal>
+    <ActionSheet
+      isVisible={isVisible}
+      onClose={onClose}
+      title={previewText}
+      actions={actions}
+    />
   );
 }
-
-// ──────────────────────────────────────────────
-// Styles
-// ──────────────────────────────────────────────
-
-const styles = StyleSheet.create({
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-  },
-
-  sheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    overflow: 'hidden',
-  },
-
-  header: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  headerText: {
-    color: Colors.textSecondary,
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    fontStyle: 'italic',
-  },
-
-  row: {
-    height: 52,
-    paddingHorizontal: 16,
-    justifyContent: 'center',
-  },
-  rowBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  rowText: {
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.ui,
-    fontSize: 15,
-  },
-});

@@ -53,10 +53,18 @@ interface Settings {
   lineHeight: number;
   scrollbackLines: number;
   autoReconnect: boolean;
-  autoReconnectDelay: number;
   keepScreenOn: boolean;
   vibrationOnWaitingInput: boolean;
   showClipboardPopupOnCopy: boolean;
+  /**
+   * When true, do NOT run the Android foreground service. The app relies on
+   * FCM push for "needs input" alerts and reconnects on next foreground.
+   * Saves battery and cellular data on flaky / metered networks.
+   */
+  lowPowerMode: boolean;
+  /** When false, system clipboard changes are not added to clipboard history.
+   *  Manual / terminal copies are still recorded — the user invoked them. */
+  clipboardCaptureSystemContent: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -67,10 +75,11 @@ const DEFAULT_SETTINGS: Settings = {
   lineHeight: 1.4,
   scrollbackLines: 500,
   autoReconnect: true,
-  autoReconnectDelay: 2000,
   keepScreenOn: true,
   vibrationOnWaitingInput: true,
   showClipboardPopupOnCopy: true,
+  lowPowerMode: false,
+  clipboardCaptureSystemContent: true,
 };
 
 interface SettingsStore extends Settings {
@@ -135,6 +144,21 @@ export const useSettingsStore = create<SettingsStore>()(
     {
       name: 'settings',
       storage: createJSONStorage(() => mmkvStorage),
+      version: 2,
+      migrate: (persistedState: unknown, _version: number) => {
+        if (!persistedState || typeof persistedState !== 'object') {
+          return DEFAULT_SETTINGS as unknown as SettingsStore;
+        }
+        const next = { ...(persistedState as Record<string, unknown>) };
+        // Strip dead field from older versions.
+        delete next.autoReconnectDelay;
+        // Backfill defaults for fields added after v1.
+        if (next.lowPowerMode === undefined) next.lowPowerMode = false;
+        if (next.clipboardCaptureSystemContent === undefined) {
+          next.clipboardCaptureSystemContent = true;
+        }
+        return next as unknown as SettingsStore;
+      },
     }
   )
 );

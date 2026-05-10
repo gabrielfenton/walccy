@@ -13,6 +13,12 @@ interface OutputBuffer {
 interface OutputStore {
   buffers: Record<string, OutputBuffer>;
   setHistory: (sessionId: string, lines: BufferedLine[], totalLines: number) => void;
+  /**
+   * Merge a RESUME gap-fill into the existing buffer. Dedupes by line
+   * `index` (newest occurrence wins), preserves prior scrollback, and
+   * clamps to `MAX_LINES_PER_BUFFER`.
+   */
+  appendResume: (sessionId: string, lines: BufferedLine[], totalLines: number) => void;
   appendLines: (sessionId: string, lines: BufferedLine[]) => void;
   clearBuffer: (sessionId: string) => void;
   setLoadingHistory: (sessionId: string, loading: boolean) => void;
@@ -52,6 +58,37 @@ export const useOutputStore = create<OutputStore>((set) => ({
           [sessionId]: {
             ...existing,
             lines: clampLines(lines),
+            totalLines,
+            historyFullyLoaded: true,
+            isLoadingHistory: false,
+          },
+        },
+      };
+    }),
+
+  appendResume: (sessionId, lines, totalLines) =>
+    set((state) => {
+      const existing = state.buffers[sessionId] ?? emptyBuffer();
+      if (lines.length === 0) {
+        return {
+          buffers: {
+            ...state.buffers,
+            [sessionId]: { ...existing, totalLines },
+          },
+        };
+      }
+      // Merge: dedupe by `index`, keep the newest occurrence (later writes
+      // win since Map.set overwrites), sort ascending, then clamp.
+      const byIndex = new Map<number, BufferedLine>();
+      for (const l of existing.lines) byIndex.set(l.index, l);
+      for (const l of lines) byIndex.set(l.index, l);
+      const merged = Array.from(byIndex.values()).sort((a, b) => a.index - b.index);
+      return {
+        buffers: {
+          ...state.buffers,
+          [sessionId]: {
+            ...existing,
+            lines: clampLines(merged),
             totalLines,
             historyFullyLoaded: true,
             isLoadingHistory: false,

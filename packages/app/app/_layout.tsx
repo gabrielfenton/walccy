@@ -17,6 +17,8 @@ import { useSettingsStore } from '../stores/settings.store';
 import { useConnectionStore } from '../stores/connection.store';
 import { wsClient } from '../services/ws-client';
 import { clipboardService } from '../services/clipboard.service';
+import { foregroundService } from '../services/foreground-service';
+import { networkStatus } from '../services/network-status';
 import { requestNotificationPermissions } from '../services/notification.service';
 import { useKeepScreenOn } from '../hooks/useKeepScreenOn';
 import { ErrorBoundary } from '../components/ui/ErrorBoundary';
@@ -58,6 +60,12 @@ function RootLayoutInner(): React.ReactElement {
   // Request notification permissions on mount
   useEffect(() => {
     requestNotificationPermissions().catch(() => {});
+  }, []);
+
+  // One-shot init for services that previously ran side effects at module load.
+  useEffect(() => {
+    foregroundService.init();
+    networkStatus.init();
   }, []);
 
   // Handle app foreground/background transitions

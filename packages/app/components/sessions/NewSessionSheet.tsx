@@ -8,30 +8,26 @@
 //   • Or type a custom absolute path
 // ──────────────────────────────────────────────
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
-  Dimensions,
   FlatList,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { wsClient } from '../../services/ws-client';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { Spacing } from '../../constants/spacing';
+import { Tint } from '../../constants/tint';
+import { SheetShell } from '../ui/SheetShell';
+import { SheetHeader } from '../ui/SheetHeader';
+import { SheetSearchBar } from '../ui/SheetSearchBar';
+import { SheetSectionHeader } from '../ui/SheetSectionHeader';
+import { Icon, type FeatherIconName } from '../ui/Icon';
 import type { DirectoryEntry } from '@walccy/protocol';
-
-const SCREEN_HEIGHT = Dimensions.get('window').height;
-const SHEET_HEIGHT = SCREEN_HEIGHT * 0.78;
 
 interface NewSessionSheetProps {
   isVisible: boolean;
@@ -52,11 +48,11 @@ const SECTION_LABEL: Record<DirectoryEntry['kind'], string> = {
   custom: 'Custom',
 };
 
-const KIND_ICON: Record<DirectoryEntry['kind'], string> = {
-  recent: '◷',
-  git:    '⎇',
-  home:   '⌂',
-  custom: '✎',
+const KIND_ICON: Record<DirectoryEntry['kind'], FeatherIconName> = {
+  recent: 'clock',
+  git:    'git-branch',
+  home:   'home',
+  custom: 'edit-3',
 };
 
 export function NewSessionSheet({
@@ -64,36 +60,20 @@ export function NewSessionSheet({
   onClose,
   onSpawned,
 }: NewSessionSheetProps): React.ReactElement {
-  const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
-
   const [query, setQuery] = useState('');
   const [entries, setEntries] = useState<DirectoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [spawningPath, setSpawningPath] = useState<string | null>(null);
 
-  // ── Slide animation ───────────────────────────
-
+  // Reset transient state when the sheet closes
   useEffect(() => {
-    if (isVisible) {
-      Animated.spring(translateY, {
-        toValue: 0,
-        tension: 65,
-        friction: 11,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      Animated.timing(translateY, {
-        toValue: SHEET_HEIGHT,
-        duration: 220,
-        useNativeDriver: true,
-      }).start();
-      // Reset state on close
+    if (!isVisible) {
       setQuery('');
       setError(null);
       setSpawningPath(null);
     }
-  }, [isVisible, translateY]);
+  }, [isVisible]);
 
   // ── Fetch directories when opened ─────────────
 
@@ -133,7 +113,7 @@ export function NewSessionSheet({
         setSpawningPath(null);
       }
     },
-    [onSpawned, onClose]
+    [onSpawned, onClose],
   );
 
   // ── Filter + group ────────────────────────────
@@ -144,16 +124,13 @@ export function NewSessionSheet({
       ? entries.filter(
           (e) =>
             e.path.toLowerCase().includes(q) ||
-            e.label.toLowerCase().includes(q)
+            e.label.toLowerCase().includes(q),
         )
       : entries;
 
-    // Group by kind, preserving section order: recent → git → home
     const order: DirectoryEntry['kind'][] = ['recent', 'git', 'home'];
     const items: ListItem[] = [];
 
-    // Custom path row at the top — only when user has typed something
-    // that looks like an absolute path or starts with `~`.
     if (q.startsWith('/') || q.startsWith('~')) {
       items.push({ kind: 'section', id: 'sec-custom', title: 'Use this path' });
       items.push({ kind: 'custom', id: 'custom', path: query.trim() });
@@ -176,11 +153,7 @@ export function NewSessionSheet({
   const renderItem = useCallback(
     ({ item }: { item: ListItem }) => {
       if (item.kind === 'section') {
-        return (
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionHeaderText}>{item.title}</Text>
-          </View>
-        );
+        return <SheetSectionHeader title={item.title} />;
       }
 
       if (item.kind === 'custom') {
@@ -194,7 +167,9 @@ export function NewSessionSheet({
             accessibilityRole="button"
             accessibilityLabel={`Spawn session at ${item.path}`}
           >
-            <Text style={styles.rowIcon}>{KIND_ICON.custom}</Text>
+            <View style={styles.rowIconWrap}>
+              <Icon name={KIND_ICON.custom} size={18} color={Colors.accent} />
+            </View>
             <View style={styles.rowText}>
               <Text style={styles.rowLabel} numberOfLines={1}>
                 {item.path}
@@ -217,7 +192,9 @@ export function NewSessionSheet({
           accessibilityRole="button"
           accessibilityLabel={`Spawn session at ${e.path}`}
         >
-          <Text style={styles.rowIcon}>{KIND_ICON[e.kind]}</Text>
+          <View style={styles.rowIconWrap}>
+            <Icon name={KIND_ICON[e.kind]} size={18} color={Colors.accent} />
+          </View>
           <View style={styles.rowText}>
             <Text style={styles.rowLabel} numberOfLines={1}>
               {e.label}
@@ -230,7 +207,7 @@ export function NewSessionSheet({
         </TouchableOpacity>
       );
     },
-    [handleSpawn, spawningPath]
+    [handleSpawn, spawningPath],
   );
 
   const keyExtractor = useCallback((item: ListItem) => item.id, []);
@@ -249,7 +226,9 @@ export function NewSessionSheet({
     if (error) {
       return (
         <View style={styles.emptyState}>
-          <Text style={styles.emptyIcon}>⚠</Text>
+          <View style={styles.emptyIconCircle}>
+            <Icon name="alert-triangle" size={20} color={Colors.accentRed} />
+          </View>
           <Text style={styles.emptyText}>Couldn't load directories</Text>
           <Text style={styles.emptySubtext}>{error}</Text>
           <TouchableOpacity
@@ -264,7 +243,9 @@ export function NewSessionSheet({
     }
     return (
       <View style={styles.emptyState}>
-        <Text style={styles.emptyIcon}>🔍</Text>
+        <View style={styles.emptyIconCircle}>
+          <Icon name="search" size={20} color={Colors.accent} />
+        </View>
         <Text style={styles.emptyText}>No matches</Text>
         <Text style={styles.emptySubtext}>
           Type an absolute path (starts with / or ~) to use it directly.
@@ -276,92 +257,42 @@ export function NewSessionSheet({
   // ── Render ────────────────────────────────────
 
   return (
-    <Modal
-      visible={isVisible}
-      transparent
-      animationType="none"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <TouchableWithoutFeedback
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-      >
-        <View style={styles.backdrop} />
-      </TouchableWithoutFeedback>
+    <SheetShell isVisible={isVisible} onClose={onClose}>
+      <SheetHeader
+        title="New Session"
+        trailingAction={{ label: 'Cancel', onPress: onClose }}
+      />
 
-      <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-        <KeyboardAvoidingView
-          style={styles.sheetInner}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <View style={styles.handleBar} />
+      <SheetSearchBar
+        value={query}
+        onChangeText={setQuery}
+        placeholder="Search or type a path…"
+        monospace
+        onSubmit={() => {
+          const p = query.trim();
+          if (p && (p.startsWith('/') || p.startsWith('~'))) {
+            void handleSpawn(p);
+          }
+        }}
+      />
 
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>New Session</Text>
-            <TouchableOpacity
-              onPress={onClose}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel="Cancel"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.cancelButton}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
+      {error && spawningPath === null ? (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{error}</Text>
+        </View>
+      ) : null}
 
-          <View style={styles.searchBarWrap}>
-            <Text style={styles.searchIcon}>⌕</Text>
-            <TextInput
-              style={styles.searchInput}
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Search or type a path…"
-              placeholderTextColor={Colors.textSecondary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              spellCheck={false}
-              returnKeyType="go"
-              onSubmitEditing={() => {
-                const p = query.trim();
-                if (p && (p.startsWith('/') || p.startsWith('~'))) {
-                  void handleSpawn(p);
-                }
-              }}
-              accessibilityLabel="Search directories"
-            />
-            {query.length > 0 ? (
-              <TouchableOpacity
-                onPress={() => setQuery('')}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel="Clear search"
-              >
-                <Text style={styles.clearButton}>✕</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          {error && spawningPath === null ? (
-            <View style={styles.errorBanner}>
-              <Text style={styles.errorBannerText}>{error}</Text>
-            </View>
-          ) : null}
-
-          <FlatList
-            data={listData}
-            renderItem={renderItem}
-            keyExtractor={keyExtractor}
-            ListEmptyComponent={ListEmpty}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            style={styles.list}
-            contentContainerStyle={listData.length === 0 ? styles.listEmpty : undefined}
-          />
-        </KeyboardAvoidingView>
-      </Animated.View>
-    </Modal>
+      <FlatList
+        data={listData}
+        renderItem={renderItem}
+        keyExtractor={keyExtractor}
+        ListEmptyComponent={ListEmpty}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        style={styles.list}
+        contentContainerStyle={listData.length === 0 ? styles.listEmpty : undefined}
+      />
+    </SheetShell>
   );
 }
 
@@ -370,84 +301,8 @@ export function NewSessionSheet({
 // ──────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  backdrop: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-  },
-  sheet: {
-    position: 'absolute',
-    bottom: 0, left: 0, right: 0,
-    height: SHEET_HEIGHT,
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    overflow: 'hidden',
-  },
-  sheetInner: {
-    flex: 1,
-  },
-  handleBar: {
-    alignSelf: 'center',
-    width: 38,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: Colors.border,
-    marginTop: 8,
-    marginBottom: 4,
-  },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.sm,
-  },
-  headerTitle: {
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.ui,
-    fontSize: 18,
-    fontWeight: FontWeight.bold,
-  },
-  cancelButton: {
-    color: Colors.accent,
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.body,
-    fontWeight: FontWeight.medium,
-  },
-
-  searchBarWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    height: 40,
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: 10,
-    gap: Spacing.sm,
-  },
-  searchIcon: {
-    color: Colors.textSecondary,
-    fontSize: 16,
-  },
-  searchInput: {
-    flex: 1,
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.body,
-    padding: 0,
-  },
-  clearButton: {
-    color: Colors.textSecondary,
-    fontSize: 14,
-    paddingHorizontal: 4,
-  },
-
   errorBanner: {
-    backgroundColor: Colors.accentRed + '22',
+    backgroundColor: Tint.dangerWeak,
     borderLeftWidth: 3,
     borderLeftColor: Colors.accentRed,
     paddingHorizontal: Spacing.lg,
@@ -469,20 +324,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  sectionHeader: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.xs,
-  },
-  sectionHeaderText: {
-    color: Colors.textSecondary,
-    fontFamily: FontFamily.ui,
-    fontSize: 11,
-    fontWeight: FontWeight.semiBold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -492,11 +333,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.border,
   },
-  rowIcon: {
+  rowIconWrap: {
     width: 24,
-    color: Colors.accent,
-    fontSize: 18,
-    textAlign: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   rowText: {
     flex: 1,
@@ -522,8 +362,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xxxl,
     gap: Spacing.sm,
   },
-  emptyIcon: {
-    fontSize: 36,
+  emptyIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Tint.accentWeak,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: Spacing.sm,
   },
   emptyText: {

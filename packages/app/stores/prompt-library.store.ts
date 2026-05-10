@@ -106,3 +106,6 @@ export const usePromptLibraryStore = create<PromptLibraryStore>()(
     }
   )
 );
+
+/** Direct store reference for use outside of React components. */
+export const promptLibraryStore = usePromptLibraryStore;

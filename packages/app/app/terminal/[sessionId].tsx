@@ -120,12 +120,8 @@ function ReadOnlyBanner({
         accessibilityRole="button"
         accessibilityLabel={`Open new wrapped session at ${cwd}`}
       >
-        <Text
-          style={styles.readOnlySpawnButtonText}
-          numberOfLines={1}
-          ellipsizeMode="middle"
-        >
-          {spawning ? 'Spawning…' : `Spawn wrapped session at ${cwd}`}
+        <Text style={styles.readOnlySpawnButtonText}>
+          {spawning ? 'Spawning…' : 'Spawn wrapped session here'}
         </Text>
       </TouchableOpacity>
       {spawnError ? (
@@ -534,7 +530,7 @@ const styles = StyleSheet.create({
   readOnlySpawnButton: {
     alignSelf: 'flex-start',
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 12,
     borderRadius: 6,
     backgroundColor: Colors.accent,
     maxWidth: '100%',
@@ -543,7 +539,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   readOnlySpawnButtonText: {
-    color: '#FFFFFF',
+    color: Colors.textPrimary,
     fontFamily: FontFamily.ui,
     fontSize: FontSize.caption,
     fontWeight: '600',

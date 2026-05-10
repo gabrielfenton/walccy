@@ -3,21 +3,15 @@
 // Bottom sheet modal for browsing and using saved prompts.
 // ──────────────────────────────────────────────
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Alert,
-  Animated,
-  Dimensions,
   FlatList,
   Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { useShallow } from 'zustand/react/shallow';
@@ -29,13 +23,10 @@ import { PromptItem } from './PromptItem';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { Spacing } from '../../constants/spacing';
-
-// ──────────────────────────────────────────────
-// Constants
-// ──────────────────────────────────────────────
-
-const SCREEN_HEIGHT = Dimensions.get('window').height;
-const SHEET_HEIGHT = SCREEN_HEIGHT * 0.7;
+import { SheetShell } from '../ui/SheetShell';
+import { SheetHeader } from '../ui/SheetHeader';
+import { SheetSectionHeader } from '../ui/SheetSectionHeader';
+import { ActionSheet, type ActionSheetItem } from '../ui/ActionSheet';
 
 // ──────────────────────────────────────────────
 // Props
@@ -178,34 +169,6 @@ const formStyles = StyleSheet.create({
 });
 
 // ──────────────────────────────────────────────
-// Section header
-// ──────────────────────────────────────────────
-
-function SectionHeader({ title }: { title: string }): React.ReactElement {
-  return (
-    <View style={sectionStyles.container}>
-      <Text style={sectionStyles.text}>{title}</Text>
-    </View>
-  );
-}
-
-const sectionStyles = StyleSheet.create({
-  container: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    backgroundColor: Colors.surfaceHigh,
-  },
-  text: {
-    color: Colors.textSecondary,
-    fontFamily: FontFamily.ui,
-    fontSize: 11,
-    fontWeight: FontWeight.semiBold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-});
-
-// ──────────────────────────────────────────────
 // List item types for FlatList data
 // ──────────────────────────────────────────────
 
@@ -221,13 +184,12 @@ export function PromptLibrarySheet({
   isVisible,
   onClose,
   onSelectPrompt,
-  activeSessionId,
 }: PromptLibrarySheetProps): React.ReactElement {
-  const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
-
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewForm, setShowNewForm] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
+  const [menuPrompt, setMenuPrompt] = useState<Prompt | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Prompt | null>(null);
 
   const {
     prompts,
@@ -248,30 +210,18 @@ export function PromptLibrarySheet({
       searchPrompts: s.searchPrompts,
       getPinned: s.getPinned,
       getRecent: s.getRecent,
-    }))
+    })),
   );
 
-  // ── Slide animation ───────────────────────────
-
+  // Reset transient UI state when the sheet closes
   useEffect(() => {
-    if (isVisible) {
-      Animated.spring(translateY, {
-        toValue: 0,
-        tension: 65,
-        friction: 11,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      Animated.timing(translateY, {
-        toValue: SHEET_HEIGHT,
-        duration: 220,
-        useNativeDriver: true,
-      }).start();
-      // Reset state when closing
+    if (!isVisible) {
       setSearchQuery('');
       setShowNewForm(false);
+      setMenuPrompt(null);
+      setConfirmDelete(null);
     }
-  }, [isVisible, translateY]);
+  }, [isVisible]);
 
   // ── Prompt actions ────────────────────────────
 
@@ -281,46 +231,12 @@ export function PromptLibrarySheet({
       onSelectPrompt(prompt.content);
       onClose();
     },
-    [recordUse, onSelectPrompt, onClose]
+    [recordUse, onSelectPrompt, onClose],
   );
 
-  const handleLongPress = useCallback(
-    (prompt: Prompt) => {
-      const pinLabel = prompt.isPinned ? 'Unpin' : 'Pin';
-      Alert.alert(prompt.title, undefined, [
-        {
-          text: 'Edit',
-          onPress: () => {
-            setEditingPrompt(prompt);
-          },
-        },
-        {
-          text: pinLabel,
-          onPress: () => updatePrompt(prompt.id, { isPinned: !prompt.isPinned }),
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            Alert.alert(
-              'Delete prompt',
-              `Delete "${prompt.title}"?`,
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: () => deletePrompt(prompt.id),
-                },
-              ]
-            );
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    },
-    [updatePrompt, deletePrompt]
-  );
+  const handleLongPress = useCallback((prompt: Prompt) => {
+    setMenuPrompt(prompt);
+  }, []);
 
   const handleEditTitleSubmit = useCallback(
     (newTitle: string) => {
@@ -329,7 +245,7 @@ export function PromptLibrarySheet({
       }
       setEditingPrompt(null);
     },
-    [editingPrompt, updatePrompt]
+    [editingPrompt, updatePrompt],
   );
 
   const handleNewPromptSave = useCallback(
@@ -338,12 +254,37 @@ export function PromptLibrarySheet({
       setShowNewForm(false);
       Keyboard.dismiss();
     },
-    [addPrompt]
+    [addPrompt],
   );
+
+  // ── Action menu items ─────────────────────────
+
+  const menuItems: ActionSheetItem[] = useMemo(() => {
+    if (!menuPrompt) return [];
+    return [
+      {
+        label: 'Edit title',
+        iconName: 'edit-3',
+        onPress: () => setEditingPrompt(menuPrompt),
+      },
+      {
+        label: menuPrompt.isPinned ? 'Unpin' : 'Pin',
+        iconName: 'bookmark',
+        onPress: () =>
+          updatePrompt(menuPrompt.id, { isPinned: !menuPrompt.isPinned }),
+      },
+      {
+        label: 'Delete',
+        iconName: 'trash-2',
+        style: 'destructive',
+        onPress: () => setConfirmDelete(menuPrompt),
+      },
+    ];
+  }, [menuPrompt, updatePrompt]);
 
   // ── Build list data ───────────────────────────
 
-  const listData: ListItem[] = React.useMemo(() => {
+  const listData: ListItem[] = useMemo(() => {
     const items: ListItem[] = [];
 
     if (searchQuery.trim()) {
@@ -351,7 +292,7 @@ export function PromptLibrarySheet({
       if (results.length > 0) {
         items.push({ kind: 'section', id: 'search-header', title: 'Results' });
         results.forEach((p) =>
-          items.push({ kind: 'prompt', id: p.id, prompt: p })
+          items.push({ kind: 'prompt', id: p.id, prompt: p }),
         );
       }
       return items;
@@ -361,7 +302,7 @@ export function PromptLibrarySheet({
     if (pinned.length > 0) {
       items.push({ kind: 'section', id: 'pinned-header', title: 'Pinned' });
       pinned.forEach((p) =>
-        items.push({ kind: 'prompt', id: p.id, prompt: p })
+        items.push({ kind: 'prompt', id: p.id, prompt: p }),
       );
     }
 
@@ -372,7 +313,7 @@ export function PromptLibrarySheet({
     if (recentFiltered.length > 0) {
       items.push({ kind: 'section', id: 'recent-header', title: 'Recent' });
       recentFiltered.forEach((p) =>
-        items.push({ kind: 'prompt', id: p.id, prompt: p })
+        items.push({ kind: 'prompt', id: p.id, prompt: p }),
       );
     }
 
@@ -383,7 +324,7 @@ export function PromptLibrarySheet({
   const renderItem = useCallback(
     ({ item }: { item: ListItem }) => {
       if (item.kind === 'section') {
-        return <SectionHeader title={item.title} />;
+        return <SheetSectionHeader title={item.title} />;
       }
       return (
         <PromptItem
@@ -393,7 +334,7 @@ export function PromptLibrarySheet({
         />
       );
     },
-    [handleSelectPrompt, handleLongPress]
+    [handleSelectPrompt, handleLongPress],
   );
 
   const keyExtractor = useCallback((item: ListItem) => item.id, []);
@@ -402,10 +343,9 @@ export function PromptLibrarySheet({
 
   const ListEmpty = () => (
     <View style={styles.emptyState}>
-      <Text style={styles.emptyIcon}>📚</Text>
       <Text style={styles.emptyText}>No prompts yet</Text>
       <Text style={styles.emptySubtext}>
-        Tap [+ New] to add your first prompt
+        Tap "Add" in the header to save your first prompt.
       </Text>
     </View>
   );
@@ -413,70 +353,48 @@ export function PromptLibrarySheet({
   // ─────────────────────────────────────────────
 
   return (
-    <Modal
-      visible={isVisible}
-      transparent
-      animationType="none"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      {/* Backdrop */}
-      <TouchableWithoutFeedback
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close prompt library"
+    <>
+      <SheetShell
+        isVisible={isVisible}
+        onClose={onClose}
+        heightRatio={0.7}
       >
-        <View style={styles.backdrop} />
-      </TouchableWithoutFeedback>
+        <SheetHeader
+          title="Prompt Library"
+          trailingAction={{
+            label: showNewForm ? 'Close' : 'Add',
+            onPress: () => setShowNewForm((v) => !v),
+            primary: true,
+          }}
+        />
 
-      {/* Sheet */}
-      <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-        <KeyboardAvoidingView
-          style={styles.sheetInner}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          {/* Header */}
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>Prompt Library</Text>
-            <TouchableOpacity
-              onPress={() => setShowNewForm((v) => !v)}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel="Add new prompt"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.newButton}>+ New</Text>
-            </TouchableOpacity>
-          </View>
+        {/* Search bar (kept as PromptSearchBar — preserves existing styling). */}
+        <PromptSearchBar
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Search prompts…"
+        />
 
-          {/* Search bar */}
-          <PromptSearchBar
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Search prompts…"
+        {/* New prompt inline form */}
+        {showNewForm && (
+          <NewPromptForm
+            onSave={handleNewPromptSave}
+            onCancel={() => setShowNewForm(false)}
           />
+        )}
 
-          {/* New prompt inline form */}
-          {showNewForm && (
-            <NewPromptForm
-              onSave={handleNewPromptSave}
-              onCancel={() => setShowNewForm(false)}
-            />
-          )}
+        {/* Prompt list */}
+        <FlatList
+          data={listData}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          ListEmptyComponent={ListEmpty}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          style={styles.list}
+        />
 
-          {/* Prompt list */}
-          <FlatList
-            data={listData}
-            renderItem={renderItem}
-            keyExtractor={keyExtractor}
-            ListEmptyComponent={ListEmpty}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            style={styles.list}
-          />
-        </KeyboardAvoidingView>
-
-        {/* Edit title modal (cross-platform Alert.prompt replacement) */}
+        {/* Edit title modal */}
         <TextInputModal
           visible={editingPrompt !== null}
           title="Edit title"
@@ -484,8 +402,36 @@ export function PromptLibrarySheet({
           onSubmit={handleEditTitleSubmit}
           onCancel={() => setEditingPrompt(null)}
         />
-      </Animated.View>
-    </Modal>
+      </SheetShell>
+
+      {/* Long-press action menu */}
+      <ActionSheet
+        isVisible={menuPrompt !== null}
+        onClose={() => setMenuPrompt(null)}
+        title={menuPrompt?.title}
+        actions={menuItems}
+      />
+
+      {/* Delete confirmation */}
+      <ActionSheet
+        isVisible={confirmDelete !== null}
+        onClose={() => setConfirmDelete(null)}
+        title="Delete prompt"
+        message={confirmDelete ? `Delete "${confirmDelete.title}"?` : undefined}
+        actions={
+          confirmDelete
+            ? [
+                {
+                  label: 'Delete',
+                  style: 'destructive',
+                  iconName: 'trash-2',
+                  onPress: () => deletePrompt(confirmDelete.id),
+                },
+              ]
+            : []
+        }
+      />
+    </>
   );
 }
 
@@ -494,56 +440,6 @@ export function PromptLibrarySheet({
 // ──────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-  },
-
-  sheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: SHEET_HEIGHT,
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    overflow: 'hidden',
-  },
-
-  sheetInner: {
-    flex: 1,
-  },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-
-  headerTitle: {
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.ui,
-    fontSize: 16,
-    fontWeight: FontWeight.bold,
-  },
-
-  newButton: {
-    color: Colors.accent,
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.body,
-    fontWeight: FontWeight.semiBold,
-  },
-
   list: {
     flex: 1,
   },
@@ -554,11 +450,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingTop: 48,
     gap: Spacing.sm,
-  },
-
-  emptyIcon: {
-    fontSize: 36,
-    marginBottom: Spacing.sm,
   },
 
   emptyText: {
