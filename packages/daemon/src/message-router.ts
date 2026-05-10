@@ -108,6 +108,9 @@ export class MessageRouter {
           config: this.deps.config,
         });
         break;
+      case 'KILL_SESSION':
+        this._handleKillSession(client, typed);
+        break;
       default:
         this.deps.registry.sendError(client.ws, 'UNKNOWN_TYPE', 'Unknown message type');
     }
@@ -155,6 +158,8 @@ export class MessageRouter {
           typeof msg.cwd === 'string' && msg.cwd.length > 0 && msg.cwd.length <= 4096 &&
           typeof msg.requestId === 'string' && msg.requestId.length > 0
         );
+      case 'KILL_SESSION':
+        return typeof msg.sessionId === 'string' && msg.sessionId.length > 0;
       default: {
         // exhaustiveness check — if a new ClientMessage variant is added without
         // a case here, TS errors at compile time (`msg` won't narrow to never).
@@ -267,6 +272,23 @@ export class MessageRouter {
       expiresAt: Date.now() + INPUT_LOCK_TTL_MS,
     });
     session.write(msg.data, client.id);
+  }
+
+  private _handleKillSession(
+    client: ConnectedClient,
+    msg: ClientMessage & { type: 'KILL_SESSION' }
+  ): void {
+    const { sessionManager, registry } = this.deps;
+    const ok = sessionManager.killSession(msg.sessionId);
+    if (!ok) {
+      registry.sendError(
+        client.ws,
+        'SESSION_NOT_FOUND',
+        `Session ${msg.sessionId} not found`
+      );
+      return;
+    }
+    logger.info(`Client ${client.id} killed session ${msg.sessionId}`);
   }
 
   private _handleResize(

@@ -94,6 +94,20 @@ export interface SpawnSessionMessage {
   requestId: string;
 }
 
+/**
+ * Terminate a session and remove it from the daemon's tracking.
+ *
+ * For all session modes the daemon will best-effort `SIGTERM` the recorded
+ * pid (if > 0), tear down its own resources (pty / wrap socket / attach
+ * stream), drop the session, and broadcast `SESSION_REMOVED`.  No response
+ * is sent on success — clients observe the removal via the broadcast.
+ * If the session id is unknown an `ERROR` (`SESSION_NOT_FOUND`) is sent.
+ */
+export interface KillSessionMessage {
+  type: 'KILL_SESSION';
+  sessionId: string;
+}
+
 export type ClientMessage =
   | AuthMessage
   | ListSessionsMessage
@@ -104,7 +118,8 @@ export type ClientMessage =
   | PingMessage
   | RegisterPushTokenMessage
   | ListDirectoriesMessage
-  | SpawnSessionMessage;
+  | SpawnSessionMessage
+  | KillSessionMessage;
 
 // ──────────────────────────────────────────────
 // WebSocket message types  (Daemon → Client)

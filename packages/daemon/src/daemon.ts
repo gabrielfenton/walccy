@@ -69,6 +69,11 @@ export class Daemon {
       this.processScanner.start(this.config.autoDetectInterval);
     }
 
+    // 7. Start idle-attach pruning
+    if (this.config.attachIdlePruneMs > 0) {
+      this.sessionManager.startIdlePrune(this.config.attachIdlePruneMs);
+    }
+
     logger.info(
       `Walccy daemon started on ws://${bindAddress}:${this.config.port}`
     );
@@ -77,6 +82,7 @@ export class Daemon {
   async stop(): Promise<void> {
     logger.info('Walccy daemon stopping…');
     this.processScanner?.stop();
+    this.sessionManager?.stopIdlePrune();
     this.wsServer?.stop();
     await this.wrapServer?.stop();
 

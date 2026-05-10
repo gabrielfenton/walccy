@@ -14,6 +14,12 @@ export interface WalccyConfig {
   sessionNameStrategy: 'cwd-basename' | 'pid';
   /** Hard cap on concurrent daemon-spawned sessions. 0 = unlimited. */
   maxSpawnedSessions: number;
+  /**
+   * Auto-prune attach-mode (read-only) sessions with no activity for this
+   * many milliseconds AND no connected clients. 0 disables pruning.
+   * Defaults to 24h.
+   */
+  attachIdlePruneMs: number;
 }
 
 const DEFAULTS: WalccyConfig = {
@@ -26,6 +32,7 @@ const DEFAULTS: WalccyConfig = {
   logLevel: 'info',
   sessionNameStrategy: 'cwd-basename',
   maxSpawnedSessions: 8,
+  attachIdlePruneMs: 24 * 60 * 60 * 1000,
 };
 
 export function getConfigPath(): string {

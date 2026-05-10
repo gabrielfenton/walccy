@@ -139,7 +139,6 @@ export default function TerminalLayout(): React.ReactElement {
   const sessions = useSessionsStore(useShallow((s) => Object.values(s.sessions)));
   const activeSessionId = useSessionsStore((s) => s.activeSessionId);
   const setActiveSession = useSessionsStore((s) => s.setActiveSession);
-  const removeSession = useSessionsStore((s) => s.removeSession);
 
   const [newSessionSheetVisible, setNewSessionSheetVisible] = useState(false);
 
@@ -149,9 +148,11 @@ export default function TerminalLayout(): React.ReactElement {
   }
 
   function handleCloseSession(id: string): void {
-    wsClient.unsubscribe(id);
-    removeSession(id);
-    // If we removed the active session, navigate to no-session
+    // The daemon will SIGTERM the underlying claude process and broadcast
+    // SESSION_REMOVED, which the ws-client uses to drop the session from
+    // the store.  We navigate eagerly so the UI doesn't briefly show a
+    // dying tab.
+    wsClient.killSession(id);
     if (activeSessionId === id) {
       router.replace('/terminal/no-session');
     }

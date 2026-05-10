@@ -20,10 +20,101 @@ export class SessionManager extends EventEmitter {
   /** Maps detected PID → session ID to avoid duplicate sessions. */
   private pidToSessionId: Map<number, string> = new Map();
   private maxBufferLines: number;
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(maxBufferLines = 10000) {
     super();
     this.maxBufferLines = maxBufferLines;
+  }
+
+  // ────────────────────────────────────────────
+  // Explicit kill (client-initiated)
+  // ────────────────────────────────────────────
+
+  /**
+   * Terminate a session by id.  Best-effort `SIGTERM` against the recorded
+   * pid (covers attach / wrap modes where the underlying process is not
+   * directly owned by the daemon — spawn mode would still get killed via
+   * pty.kill inside session.kill, but SIGTERM first is harmless and unifies
+   * the code path).  Then the session is removed (which emits 'session-removed'
+   * so ws-server broadcasts SESSION_REMOVED to clients).
+   *
+   * Returns true if a session with that id existed, false otherwise.
+   */
+  killSession(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (!session) return false;
+
+    const pid = session.pid;
+    if (pid > 0) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code;
+        // ESRCH = no such process (already dead) — fine.
+        // EPERM = not ours (rare for user-owned claude processes) — log.
+        if (code !== 'ESRCH') {
+          logger.warn(
+            `killSession(${id}): process.kill(${pid}) failed: ${String(err)}`
+          );
+        }
+      }
+    }
+
+    this.removeSession(id);
+    return true;
+  }
+
+  // ────────────────────────────────────────────
+  // Idle-attach pruning
+  // ────────────────────────────────────────────
+
+  /**
+   * Periodically drop attach-mode (non-owned) sessions that have had no
+   * activity for `idleMs` and currently have no subscribed clients.  This
+   * cleans up long-running orphans (e.g. a months-old detached tmux running
+   * `claude`) so they don't permanently litter the tab bar.
+   *
+   * The underlying process is NOT killed — pruning only stops tracking.
+   * The ProcessScanner won't re-emit `process-found` for a still-alive pid
+   * already in its `knownPids`, so the pruned session stays gone until the
+   * pid dies and a new claude process recycles the id, or the daemon
+   * restarts.
+   */
+  startIdlePrune(idleMs: number, checkIntervalMs = 15 * 60 * 1000): void {
+    if (this.pruneTimer || idleMs <= 0) return;
+    this.pruneTimer = setInterval(() => {
+      this._pruneOnce(idleMs);
+    }, checkIntervalMs);
+    this.pruneTimer.unref();
+    logger.info(
+      `SessionManager: idle-attach prune enabled (idleMs=${idleMs}, checkMs=${checkIntervalMs})`
+    );
+  }
+
+  stopIdlePrune(): void {
+    if (this.pruneTimer) {
+      clearInterval(this.pruneTimer);
+      this.pruneTimer = null;
+    }
+  }
+
+  /** Exposed for tests — runs one prune pass without scheduling. */
+  _pruneOnce(idleMs: number): number {
+    const cutoff = Date.now() - idleMs;
+    let removed = 0;
+    for (const session of Array.from(this.sessions.values())) {
+      const info = session.info;
+      if (info.owned) continue; // only prune RO sessions
+      if (info.connectedClients.length > 0) continue;
+      if (info.lastActivityAt > cutoff) continue;
+      logger.info(
+        `Pruning idle attach session ${session.id} (pid=${session.pid}, idle for ${Date.now() - info.lastActivityAt}ms)`
+      );
+      this.removeSession(session.id);
+      removed++;
+    }
+    return removed;
   }
 
   // ────────────────────────────────────────────

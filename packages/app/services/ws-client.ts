@@ -181,6 +181,17 @@ class WsClient {
     this.send({ type: 'UNSUBSCRIBE', sessionId });
   }
 
+  /**
+   * Ask the daemon to kill a session.  Local store cleanup happens when the
+   * resulting SESSION_REMOVED broadcast arrives — we just unsubscribe locally
+   * so we stop hearing about it in the interim.
+   */
+  killSession(sessionId: string): void {
+    this.activeSubscriptions.delete(sessionId);
+    this.lastSeenIndex.delete(sessionId);
+    this.send({ type: 'KILL_SESSION', sessionId });
+  }
+
   sendResize(sessionId: string, cols: number, rows: number): void {
     this.send({ type: 'RESIZE', sessionId, cols, rows });
   }
