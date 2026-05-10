@@ -1,11 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
   <uses-permission android:name="android.permission.CAMERA"/>
   <uses-permission android:name="android.permission.INTERNET"/>
-  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
-  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <!-- Foreground service so the WS connection survives backgrounding on flaky networks -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
@@ -33,5 +36,23 @@
         <data android:scheme="walccy"/>
       </intent-filter>
     </activity>
+    <!--
+      Notifee foreground service. Type must match permission FOREGROUND_SERVICE_DATA_SYNC.
+
+      Play-policy justification for `dataSync`:
+      Walccy maintains a persistent WebSocket to a user-owned home daemon to
+      stream terminal output and forward keystrokes — semantically a data
+      sync between the device and a remote source. If Play Console rejects,
+      switch to `specialUse` with:
+        <property
+          name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="walccy_terminal_relay" />
+      and update the matching FOREGROUND_SERVICE_* permission.
+    -->
+    <service
+      android:name="app.notifee.core.ForegroundService"
+      android:foregroundServiceType="dataSync"
+      android:stopWithTask="false"
+      tools:replace="android:foregroundServiceType" />
   </application>
 </manifest>
