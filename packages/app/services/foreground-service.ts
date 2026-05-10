@@ -36,21 +36,30 @@ interface NotifeeDisplayParams {
   };
 }
 
+type AndroidImportanceEnum = { LOW: number; DEFAULT: number; HIGH: number };
+
 interface NotifeeModule {
   createChannel: (channel: { id: string; name: string; importance?: number }) => Promise<string>;
   displayNotification: (params: NotifeeDisplayParams) => Promise<string>;
   stopForegroundService: () => Promise<void>;
   registerForegroundService: (runner: (notification: unknown) => Promise<void>) => void;
-  AndroidImportance: { LOW: number; DEFAULT: number; HIGH: number };
+  AndroidImportance?: AndroidImportanceEnum;
   AndroidVisibility?: { SECRET: number; PRIVATE: number; PUBLIC: number };
 }
 
 let notifee: NotifeeModule | null = null;
+let AndroidImportance: AndroidImportanceEnum | null = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  notifee = require('@notifee/react-native').default ?? require('@notifee/react-native');
+  const mod = require('@notifee/react-native');
+  // The default export is the API instance (displayNotification, etc.).
+  // The enum (AndroidImportance) is a separate NAMED export on the module
+  // — not a property of the default — so resolve it independently.
+  notifee = mod.default ?? mod;
+  AndroidImportance = mod.AndroidImportance ?? mod.default?.AndroidImportance ?? null;
 } catch {
   notifee = null;
+  AndroidImportance = null;
 }
 
 // ── Status copy ──────────────────────────────
@@ -134,7 +143,9 @@ class ForegroundService {
         await notifee!.createChannel({
           id: CHANNEL_ID,
           name: CHANNEL_NAME,
-          importance: notifee!.AndroidImportance.LOW,
+          // Fall back to the literal LOW value (2) if the enum wasn't found
+          // — channel creation should not fail just because of import shape.
+          importance: AndroidImportance?.LOW ?? 2,
         });
       })();
     }
