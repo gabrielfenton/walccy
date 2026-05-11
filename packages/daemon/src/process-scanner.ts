@@ -98,23 +98,18 @@ export class ProcessScanner extends EventEmitter {
   /**
    * Returns true if the process with `pid` is a `claude` process.
    * Reads /proc/{pid}/cmdline (null-byte separated argv).
+   *
+   * Only argv[0] (and argv[1] when argv[0] is a JS runtime) are inspected —
+   * scanning every argv element causes false positives like `walccy claude`
+   * (the wrap-cli wrapper), whose subcommand `claude` would otherwise match
+   * and produce a duplicate RO tab alongside the wrapped session.
    */
   private async isClaude(pid: number): Promise<boolean> {
     const cmdlinePath = path.join('/proc', String(pid), 'cmdline');
     try {
       const raw = await fsp.readFile(cmdlinePath, 'utf8');
-      // cmdline entries are separated by null bytes
       const args = raw.split('\0').filter(Boolean);
-      // Match the binary name 'claude' anywhere in args[0] (the executable path)
-      // Also check args[1..] in case it's run via node/npx as `node .../claude`
-      return args.some((arg) => {
-        // Match bare binary name or path ending with /claude or /claude.js etc.
-        return (
-          arg === 'claude' ||
-          /[/\\]claude(?:\.[jt]s)?$/.test(arg) ||
-          arg.endsWith('/claude')
-        );
-      });
+      return isClaudeProcessArgv(args);
     } catch {
       // Process may have exited or we don't have permission
       return false;
@@ -141,6 +136,30 @@ export class ProcessScanner extends EventEmitter {
   on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
+}
+
+/**
+ * Exposed for tests: argv-matching logic used by ProcessScanner.isClaude.
+ * Inspects only argv[0] (and argv[1] when argv[0] is a JS runtime) so that
+ * subcommands like `walccy claude` don't false-positive as a claude process.
+ */
+export function isClaudeProcessArgv(args: string[]): boolean {
+  if (args.length === 0) return false;
+  if (isClaudeArg(args[0])) return true;
+  if (isJsRuntime(args[0]) && args.length >= 2 && isClaudeArg(args[1])) {
+    return true;
+  }
+  return false;
+}
+
+function isClaudeArg(arg: string): boolean {
+  const base = arg.split(/[/\\]/).pop() ?? arg;
+  return base === 'claude' || /^claude\.[jt]s$/.test(base);
+}
+
+function isJsRuntime(arg: string): boolean {
+  const base = arg.split(/[/\\]/).pop() ?? arg;
+  return base === 'node' || base === 'bun' || base === 'deno' || base === 'npx';
 }
 
 // Satisfy TS unused import check

@@ -3,6 +3,7 @@ import * as net from 'net';
 import * as path from 'path';
 import { Session } from './session.js';
 import type { Session as SessionInfo } from '@walccy/protocol';
+import { TranscriptWatcher } from './transcript-watcher.js';
 import logger from './logger.js';
 
 // ──────────────────────────────────────────────
@@ -21,10 +22,20 @@ export class SessionManager extends EventEmitter {
   private pidToSessionId: Map<number, string> = new Map();
   private maxBufferLines: number;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
+  private transcripts: TranscriptWatcher;
 
-  constructor(maxBufferLines = 10000) {
+  constructor(maxBufferLines = 10000, transcripts?: TranscriptWatcher) {
     super();
     this.maxBufferLines = maxBufferLines;
+    this.transcripts = transcripts ?? new TranscriptWatcher();
+    this.transcripts.on('summary', (sessionId: string, summary: string) => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return;
+      const trimmed = summary.trim();
+      if (!trimmed || session.info.name === trimmed) return;
+      session.setName(trimmed);
+      this.emit('session-updated', sessionId, { name: trimmed });
+    });
   }
 
   // ────────────────────────────────────────────
@@ -99,6 +110,10 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  stopTranscriptWatcher(): void {
+    this.transcripts.stopAll();
+  }
+
   /** Exposed for tests — runs one prune pass without scheduling. */
   _pruneOnce(idleMs: number): number {
     const cutoff = Date.now() - idleMs;
@@ -150,6 +165,7 @@ export class SessionManager extends EventEmitter {
       `Session created: id=${session.id} pid=${pid} cwd=${cwd} name=${name}`
     );
 
+    this.transcripts.watch(session.id, cwd, session.info.startedAt);
     this.emit('session-added', session.info);
 
     return session;
@@ -174,6 +190,7 @@ export class SessionManager extends EventEmitter {
     await session.spawn();
 
     logger.info(`Spawned session: id=${session.id} cwd=${cwd} name=${name}`);
+    this.transcripts.watch(session.id, cwd, session.info.startedAt);
     this.emit('session-added', session.info);
 
     return session;
@@ -189,6 +206,28 @@ export class SessionManager extends EventEmitter {
     name: string | undefined,
     socket: net.Socket
   ): Session {
+    // If we already track this pid (e.g. the scanner created an attach
+    // session, or an earlier wrap connection went stale), promote that
+    // session in place instead of creating a duplicate.  Preserves the
+    // session id (so the client tab survives) and the buffered history.
+    if (pid > 0) {
+      const existingId = this.pidToSessionId.get(pid);
+      if (existingId) {
+        const existing = this.sessions.get(existingId);
+        if (existing) {
+          existing.promoteToWrap(socket);
+          logger.info(
+            `Wrapped session promoted: id=${existing.id} pid=${pid} cwd=${cwd}`
+          );
+          this.emit('session-updated', existing.id, {
+            owned: true,
+            status: 'active',
+          });
+          return existing;
+        }
+      }
+    }
+
     const finalName = name ?? this.deriveName(cwd);
     const session = new Session(pid, cwd, finalName, this.maxBufferLines);
     session.attachWrapper(socket);
@@ -207,6 +246,7 @@ export class SessionManager extends EventEmitter {
       `Wrapped session created: id=${session.id} pid=${pid} cwd=${cwd} name=${finalName}`
     );
 
+    this.transcripts.watch(session.id, cwd, session.info.startedAt);
     this.emit('session-added', session.info);
 
     return session;
@@ -232,6 +272,7 @@ export class SessionManager extends EventEmitter {
     // Clean up PID mapping
     this.pidToSessionId.delete(session.pid);
 
+    this.transcripts.unwatch(id);
     session.kill();
     this.sessions.delete(id);
 
@@ -267,7 +308,14 @@ export class SessionManager extends EventEmitter {
   // ────────────────────────────────────────────
 
   private deriveName(cwd: string): string {
-    return path.basename(cwd) || cwd;
+    const base = path.basename(cwd) || cwd;
+    const used = new Set<string>();
+    for (const s of this.sessions.values()) used.add(s.info.name);
+    if (!used.has(base)) return base;
+    for (let i = 2; ; i++) {
+      const candidate = `${base} ${i}`;
+      if (!used.has(candidate)) return candidate;
+    }
   }
 
   /** Forward session 'data' events as session-updated metadata broadcasts. */

@@ -83,6 +83,7 @@ export class Daemon {
     logger.info('Walccy daemon stopping…');
     this.processScanner?.stop();
     this.sessionManager?.stopIdlePrune();
+    this.sessionManager?.stopTranscriptWatcher();
     this.wsServer?.stop();
     await this.wrapServer?.stop();
 

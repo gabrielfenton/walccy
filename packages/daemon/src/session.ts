@@ -104,6 +104,10 @@ export class Session extends EventEmitter {
     this._info.connectedClients = clients;
   }
 
+  setName(name: string): void {
+    this._info.name = name;
+  }
+
   /**
    * Bind a wrapper-CLI socket to this session.  Output bytes will arrive via
    * `pushExternalData()` and writes initiated by daemon clients will be sent
@@ -127,6 +131,43 @@ export class Session extends EventEmitter {
         this.emit('exit');
       }
     });
+  }
+
+  /**
+   * Re-bind this existing session to a (new) wrapper-CLI socket.  Used when
+   * a `walccy wrap` client reconnects after a daemon restart or transient
+   * disconnect: the scanner may have created an attach (RO) session for the
+   * still-running claude pid in the meantime, and we want to upgrade it back
+   * to a wrap session in place — preserving session id, buffer, and the
+   * client-side tab — rather than spawning a duplicate.
+   *
+   * Handles two prior states:
+   *   - `attach`: tear down the /proc stream and exit watcher, then attach
+   *     the new socket as wrap.
+   *   - `wrap`: destroy the previous (presumably stale) socket without
+   *     firing 'exit', then attach the new one.
+   */
+  promoteToWrap(socket: net.Socket): void {
+    const oldMode = this.mode;
+    // Null `mode` first so the old socket's 'close' handler short-circuits
+    // (attachWrapper's handler checks mode.socket === socket; null != wrap).
+    this.mode = null;
+
+    if (oldMode?.kind === 'attach' && oldMode.stream) {
+      oldMode.stream.destroy();
+    } else if (oldMode?.kind === 'wrap') {
+      try {
+        oldMode.socket.destroy();
+      } catch {
+        // already closed
+      }
+    }
+    if (this._exitWatcher) {
+      clearInterval(this._exitWatcher);
+      this._exitWatcher = null;
+    }
+
+    this.attachWrapper(socket);
   }
 
   /** Feed raw output from a wrapper-CLI socket into this session's buffer. */

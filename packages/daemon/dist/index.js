@@ -97,16 +97,16 @@ var init_logger = __esm({
 
 // src/wrap-server.ts
 function getWrapSocketPath() {
-  return path6.join(os4.homedir(), ".walccy", "wrap.sock");
+  return path7.join(os5.homedir(), ".walccy", "wrap.sock");
 }
-var fs5, net, os4, path6, WrapServer;
+var fs6, net, os5, path7, WrapServer;
 var init_wrap_server = __esm({
   "src/wrap-server.ts"() {
     "use strict";
-    fs5 = __toESM(require("fs"));
+    fs6 = __toESM(require("fs"));
     net = __toESM(require("net"));
-    os4 = __toESM(require("os"));
-    path6 = __toESM(require("path"));
+    os5 = __toESM(require("os"));
+    path7 = __toESM(require("path"));
     init_logger();
     WrapServer = class {
       constructor(sessionManager) {
@@ -117,10 +117,10 @@ var init_wrap_server = __esm({
       server = null;
       socketPath;
       async start() {
-        const dir = path6.dirname(this.socketPath);
-        if (!fs5.existsSync(dir)) fs5.mkdirSync(dir, { recursive: true, mode: 448 });
+        const dir = path7.dirname(this.socketPath);
+        if (!fs6.existsSync(dir)) fs6.mkdirSync(dir, { recursive: true, mode: 448 });
         try {
-          fs5.chmodSync(dir, 448);
+          fs6.chmodSync(dir, 448);
         } catch {
         }
         const probeErr = await new Promise((resolve3) => {
@@ -141,7 +141,7 @@ var init_wrap_server = __esm({
         }
         if (probeErr.code !== "ENOENT") {
           try {
-            fs5.unlinkSync(this.socketPath);
+            fs6.unlinkSync(this.socketPath);
           } catch (err) {
             if (err.code !== "ENOENT") {
               logger_default.warn(`wrap: failed to remove stale socket: ${err.message}`);
@@ -153,7 +153,7 @@ var init_wrap_server = __esm({
           if (!this.server) return reject(new Error("server not initialized"));
           this.server.once("error", reject);
           this.server.listen(this.socketPath, () => {
-            fs5.chmodSync(this.socketPath, 384);
+            fs6.chmodSync(this.socketPath, 384);
             resolve3();
           });
         });
@@ -162,9 +162,9 @@ var init_wrap_server = __esm({
       async stop() {
         if (!this.server) return;
         await new Promise((resolve3) => this.server.close(() => resolve3()));
-        if (fs5.existsSync(this.socketPath)) {
+        if (fs6.existsSync(this.socketPath)) {
           try {
-            fs5.unlinkSync(this.socketPath);
+            fs6.unlinkSync(this.socketPath);
           } catch {
           }
         }
@@ -257,10 +257,10 @@ function buildSnippet() {
     ""
   ].join("\n");
 }
-function candidateRcFiles(home = os6.homedir()) {
+function candidateRcFiles(home = os7.homedir()) {
   return [
-    { path: path8.join(home, ".bashrc"), shell: "bash" },
-    { path: path8.join(home, ".zshrc"), shell: "zsh" }
+    { path: path9.join(home, ".bashrc"), shell: "bash" },
+    { path: path9.join(home, ".zshrc"), shell: "zsh" }
   ];
 }
 function stripAllBlocks(content) {
@@ -284,34 +284,34 @@ function stripAllBlocks(content) {
   return out;
 }
 function safeRewrite(filePath, nextContent) {
-  const lst = fs8.lstatSync(filePath);
+  const lst = fs9.lstatSync(filePath);
   if (lst.isSymbolicLink()) {
     throw new Error(`refusing to follow symlink: ${filePath}`);
   }
   const mode = lst.mode & 511;
-  const dir = path8.dirname(filePath);
-  const tmp = path8.join(dir, `.${path8.basename(filePath)}.walccy.${process.pid}.tmp`);
-  fs8.writeFileSync(tmp, nextContent, { encoding: "utf8", mode });
+  const dir = path9.dirname(filePath);
+  const tmp = path9.join(dir, `.${path9.basename(filePath)}.walccy.${process.pid}.tmp`);
+  fs9.writeFileSync(tmp, nextContent, { encoding: "utf8", mode });
   try {
-    fs8.renameSync(tmp, filePath);
+    fs9.renameSync(tmp, filePath);
   } catch (err) {
     try {
-      fs8.unlinkSync(tmp);
+      fs9.unlinkSync(tmp);
     } catch {
     }
     throw err;
   }
 }
-function installShellIntegration(home = os6.homedir()) {
+function installShellIntegration(home = os7.homedir()) {
   const result = { modified: [], skipped: [] };
   const snippet = buildSnippet();
   for (const rc of candidateRcFiles(home)) {
-    if (!fs8.existsSync(rc.path)) {
+    if (!fs9.existsSync(rc.path)) {
       result.skipped.push(`${rc.path} (does not exist)`);
       continue;
     }
     try {
-      const original = fs8.readFileSync(rc.path, "utf8");
+      const original = fs9.readFileSync(rc.path, "utf8");
       const stripped = stripAllBlocks(original);
       const needsLeadingNl = stripped.length > 0 && !stripped.endsWith("\n");
       const next = stripped + (needsLeadingNl ? "\n" : "") + snippet;
@@ -328,15 +328,15 @@ function installShellIntegration(home = os6.homedir()) {
   }
   return result;
 }
-function uninstallShellIntegration(home = os6.homedir()) {
+function uninstallShellIntegration(home = os7.homedir()) {
   const result = { modified: [], skipped: [] };
   for (const rc of candidateRcFiles(home)) {
-    if (!fs8.existsSync(rc.path)) {
+    if (!fs9.existsSync(rc.path)) {
       result.skipped.push(`${rc.path} (does not exist)`);
       continue;
     }
     try {
-      const original = fs8.readFileSync(rc.path, "utf8");
+      const original = fs9.readFileSync(rc.path, "utf8");
       const stripped = stripAllBlocks(original);
       if (stripped === original) {
         result.skipped.push(`${rc.path} (no walccy block found)`);
@@ -351,13 +351,13 @@ function uninstallShellIntegration(home = os6.homedir()) {
   }
   return result;
 }
-var fs8, os6, path8, WRAPPED_ENV_VAR, BEGIN, END, VERSION_TAG;
+var fs9, os7, path9, WRAPPED_ENV_VAR, BEGIN, END, VERSION_TAG;
 var init_shell_installer = __esm({
   "src/shell-installer.ts"() {
     "use strict";
-    fs8 = __toESM(require("fs"));
-    os6 = __toESM(require("os"));
-    path8 = __toESM(require("path"));
+    fs9 = __toESM(require("fs"));
+    os7 = __toESM(require("os"));
+    path9 = __toESM(require("path"));
     WRAPPED_ENV_VAR = "WALCCY_WRAPPED";
     BEGIN = "# >>> walccy shell integration >>>";
     END = "# <<< walccy shell integration <<<";
@@ -374,7 +374,7 @@ __export(wrap_cli_exports, {
 function findInPath(cmd) {
   if (cmd.includes("/")) {
     try {
-      fs9.accessSync(cmd, fs9.constants.X_OK);
+      fs10.accessSync(cmd, fs10.constants.X_OK);
       return cmd;
     } catch {
       return null;
@@ -383,9 +383,9 @@ function findInPath(cmd) {
   const PATH = process.env["PATH"] ?? "";
   for (const dir of PATH.split(":")) {
     if (!dir) continue;
-    const full = path9.join(dir, cmd);
+    const full = path10.join(dir, cmd);
     try {
-      fs9.accessSync(full, fs9.constants.X_OK);
+      fs10.accessSync(full, fs10.constants.X_OK);
       return full;
     } catch {
     }
@@ -451,65 +451,93 @@ async function runWrapper(argv) {
     }
     process.exit(127);
   }
-  const socket = net2.createConnection(getWrapSocketPath());
-  socket.once("connect", () => {
-    socket.write(
-      JSON.stringify({
-        type: "REGISTER",
-        pid: term.pid,
-        cwd: process.cwd(),
-        name: path9.basename(process.cwd()) || process.cwd(),
-        cols,
-        rows
-      }) + "\n"
-    );
-  });
+  let socket = null;
   let socketReady = false;
-  socket.on("data", (chunk) => {
-    let buffer = chunk.toString("utf8");
-    let nl;
-    while ((nl = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (msg.type === "REGISTERED") {
-        socketReady = true;
-      } else if (msg.type === "INPUT" && msg.data) {
-        const data = Buffer.from(msg.data, "base64").toString("utf8");
-        term.write(data);
-      } else if (msg.type === "RESIZE" && msg.cols && msg.rows) {
-        try {
-          term.resize(msg.cols, msg.rows);
-        } catch {
-        }
-      }
-    }
-  });
-  socket.on("error", (err) => {
-    socketReady = false;
-    process.stderr.write(`
-[walccy] daemon socket error: ${err.message} (continuing without mirror)
-`);
-  });
-  socket.on("close", () => {
-    socketReady = false;
-  });
-  const MAX_PENDING_BYTES = 1 * 1024 * 1024;
   let pendingBytes = 0;
   let warnedDropping = false;
-  socket.on("drain", () => {
-    pendingBytes = 0;
-    warnedDropping = false;
-  });
+  let reconnectTimer = null;
+  let reconnectDelay = 500;
+  const MAX_RECONNECT_DELAY = 1e4;
+  const MAX_PENDING_BYTES = 1 * 1024 * 1024;
+  let shuttingDown = false;
+  let warnedDisconnect = false;
+  const registerPayload = () => JSON.stringify({
+    type: "REGISTER",
+    pid: term.pid,
+    cwd: process.cwd(),
+    name: path10.basename(process.cwd()) || process.cwd(),
+    cols,
+    rows
+  }) + "\n";
+  function connect() {
+    if (shuttingDown) return;
+    const s = net2.createConnection(getWrapSocketPath());
+    socket = s;
+    s.once("connect", () => {
+      reconnectDelay = 500;
+      warnedDisconnect = false;
+      s.write(registerPayload());
+    });
+    s.on("data", (chunk) => {
+      let buffer = chunk.toString("utf8");
+      let nl;
+      while ((nl = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        let msg;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (msg.type === "REGISTERED") {
+          socketReady = true;
+        } else if (msg.type === "INPUT" && msg.data) {
+          const data = Buffer.from(msg.data, "base64").toString("utf8");
+          term.write(data);
+        } else if (msg.type === "RESIZE" && msg.cols && msg.rows) {
+          try {
+            term.resize(msg.cols, msg.rows);
+          } catch {
+          }
+        }
+      }
+    });
+    s.on("drain", () => {
+      pendingBytes = 0;
+      warnedDropping = false;
+    });
+    s.on("error", () => {
+      socketReady = false;
+    });
+    s.on("close", () => {
+      socketReady = false;
+      pendingBytes = 0;
+      if (socket === s) socket = null;
+      scheduleReconnect();
+    });
+  }
+  function scheduleReconnect() {
+    if (shuttingDown || reconnectTimer) return;
+    if (!warnedDisconnect) {
+      warnedDisconnect = true;
+      process.stderr.write(
+        "\n[walccy] daemon socket lost \u2014 reconnecting in background\n"
+      );
+    }
+    const delay2 = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay2);
+    reconnectTimer.unref();
+  }
+  connect();
   term.onData((data) => {
     process.stdout.write(data);
-    if (socketReady) {
+    if (socketReady && socket) {
       if (pendingBytes > MAX_PENDING_BYTES) {
         if (!warnedDropping) {
           warnedDropping = true;
@@ -550,7 +578,12 @@ async function runWrapper(argv) {
         } catch {
         }
       }
-      if (socket.writable) {
+      shuttingDown = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (socket && socket.writable) {
         socket.write(JSON.stringify({ type: "EXIT", exitCode }) + "\n");
         socket.end();
       }
@@ -562,13 +595,13 @@ async function runWrapper(argv) {
   });
   return void 0;
 }
-var fs9, net2, path9;
+var fs10, net2, path10;
 var init_wrap_cli = __esm({
   "src/wrap-cli.ts"() {
     "use strict";
-    fs9 = __toESM(require("fs"));
+    fs10 = __toESM(require("fs"));
     net2 = __toESM(require("net"));
-    path9 = __toESM(require("path"));
+    path10 = __toESM(require("path"));
     init_wrap_server();
     init_shell_installer();
   }
@@ -577,8 +610,8 @@ var init_wrap_cli = __esm({
 // src/index.ts
 var import_commander = require("commander");
 var crypto4 = __toESM(require("crypto"));
-var os7 = __toESM(require("os"));
-var path10 = __toESM(require("path"));
+var os8 = __toESM(require("os"));
+var path11 = __toESM(require("path"));
 
 // package.json
 var package_default = {
@@ -677,8 +710,8 @@ function saveConfig(config) {
 }
 
 // src/session-manager.ts
-var import_events2 = require("events");
-var path3 = __toESM(require("path"));
+var import_events3 = require("events");
+var path4 = __toESM(require("path"));
 
 // src/session.ts
 var import_events = require("events");
@@ -843,6 +876,9 @@ var Session = class _Session extends import_events.EventEmitter {
   setConnectedClients(clients) {
     this._info.connectedClients = clients;
   }
+  setName(name) {
+    this._info.name = name;
+  }
   /**
    * Bind a wrapper-CLI socket to this session.  Output bytes will arrive via
    * `pushExternalData()` and writes initiated by daemon clients will be sent
@@ -862,6 +898,37 @@ var Session = class _Session extends import_events.EventEmitter {
         this.emit("exit");
       }
     });
+  }
+  /**
+   * Re-bind this existing session to a (new) wrapper-CLI socket.  Used when
+   * a `walccy wrap` client reconnects after a daemon restart or transient
+   * disconnect: the scanner may have created an attach (RO) session for the
+   * still-running claude pid in the meantime, and we want to upgrade it back
+   * to a wrap session in place — preserving session id, buffer, and the
+   * client-side tab — rather than spawning a duplicate.
+   *
+   * Handles two prior states:
+   *   - `attach`: tear down the /proc stream and exit watcher, then attach
+   *     the new socket as wrap.
+   *   - `wrap`: destroy the previous (presumably stale) socket without
+   *     firing 'exit', then attach the new one.
+   */
+  promoteToWrap(socket) {
+    const oldMode = this.mode;
+    this.mode = null;
+    if (oldMode?.kind === "attach" && oldMode.stream) {
+      oldMode.stream.destroy();
+    } else if (oldMode?.kind === "wrap") {
+      try {
+        oldMode.socket.destroy();
+      } catch {
+      }
+    }
+    if (this._exitWatcher) {
+      clearInterval(this._exitWatcher);
+      this._exitWatcher = null;
+    }
+    this.attachWrapper(socket);
   }
   /** Feed raw output from a wrapper-CLI socket into this session's buffer. */
   pushExternalData(data) {
@@ -1163,17 +1230,152 @@ var Session = class _Session extends import_events.EventEmitter {
   }
 };
 
+// src/transcript-watcher.ts
+var import_events2 = require("events");
+var fs4 = __toESM(require("fs"));
+var os3 = __toESM(require("os"));
+var path3 = __toESM(require("path"));
+init_logger();
+var TranscriptWatcher = class extends import_events2.EventEmitter {
+  states = /* @__PURE__ */ new Map();
+  filesInUse = /* @__PURE__ */ new Set();
+  timer = null;
+  baseDir;
+  pollIntervalMs;
+  mtimeSlackMs;
+  constructor(opts = {}) {
+    super();
+    this.baseDir = opts.baseDir ?? path3.join(os3.homedir(), ".claude", "projects");
+    this.pollIntervalMs = opts.pollIntervalMs ?? 2e3;
+    this.mtimeSlackMs = opts.mtimeSlackMs ?? 5e3;
+  }
+  watch(sessionId, cwd, startedAt) {
+    if (this.states.has(sessionId)) return;
+    this.states.set(sessionId, {
+      cwd,
+      startedAt,
+      file: null,
+      offset: 0,
+      carry: ""
+    });
+    if (!this.timer) {
+      this.timer = setInterval(() => {
+        void this.pollAll();
+      }, this.pollIntervalMs);
+      this.timer.unref();
+    }
+    void this.pollOne(sessionId);
+  }
+  unwatch(sessionId) {
+    const s = this.states.get(sessionId);
+    if (!s) return;
+    if (s.file) this.filesInUse.delete(s.file);
+    this.states.delete(sessionId);
+    if (this.states.size === 0 && this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+  stopAll() {
+    for (const id of Array.from(this.states.keys())) this.unwatch(id);
+  }
+  // ────────────────────────────────────────────
+  async pollAll() {
+    for (const id of Array.from(this.states.keys())) {
+      await this.pollOne(id);
+    }
+  }
+  async pollOne(sessionId) {
+    const state = this.states.get(sessionId);
+    if (!state) return;
+    try {
+      if (!state.file) {
+        const file = await this.findCandidateFile(state.cwd, state.startedAt);
+        if (!file) return;
+        state.file = file;
+        this.filesInUse.add(file);
+      }
+      const stat = await fs4.promises.stat(state.file).catch(() => null);
+      if (!stat || stat.size <= state.offset) return;
+      const length = stat.size - state.offset;
+      const buf = Buffer.alloc(length);
+      const fh = await fs4.promises.open(state.file, "r");
+      try {
+        await fh.read(buf, 0, length, state.offset);
+      } finally {
+        await fh.close();
+      }
+      state.offset = stat.size;
+      const combined = state.carry + buf.toString("utf8");
+      const nlIdx = combined.lastIndexOf("\n");
+      const consumed = nlIdx >= 0 ? combined.slice(0, nlIdx) : "";
+      state.carry = nlIdx >= 0 ? combined.slice(nlIdx + 1) : combined;
+      if (!consumed) return;
+      let latest = null;
+      for (const line of consumed.split("\n")) {
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.type === "summary" && typeof obj.summary === "string") {
+            latest = obj.summary;
+          }
+        } catch {
+        }
+      }
+      if (latest) this.emit("summary", sessionId, latest);
+    } catch (err) {
+      logger_default.debug(`TranscriptWatcher pollOne(${sessionId}) failed: ${String(err)}`);
+    }
+  }
+  async findCandidateFile(cwd, startedAt) {
+    const dir = path3.join(this.baseDir, encodeCwd(cwd));
+    let entries;
+    try {
+      entries = await fs4.promises.readdir(dir);
+    } catch {
+      return void 0;
+    }
+    let best;
+    for (const entry of entries) {
+      if (!entry.endsWith(".jsonl")) continue;
+      const full = path3.join(dir, entry);
+      if (this.filesInUse.has(full)) continue;
+      const stat = await fs4.promises.stat(full).catch(() => null);
+      if (!stat) continue;
+      if (stat.mtimeMs < startedAt - this.mtimeSlackMs) continue;
+      const distance = Math.abs(stat.mtimeMs - startedAt);
+      if (!best || distance < best.distance) {
+        best = { file: full, distance };
+      }
+    }
+    return best?.file;
+  }
+};
+function encodeCwd(cwd) {
+  return cwd.replace(/[/.]/g, "-");
+}
+
 // src/session-manager.ts
 init_logger();
-var SessionManager = class extends import_events2.EventEmitter {
+var SessionManager = class extends import_events3.EventEmitter {
   sessions = /* @__PURE__ */ new Map();
   /** Maps detected PID → session ID to avoid duplicate sessions. */
   pidToSessionId = /* @__PURE__ */ new Map();
   maxBufferLines;
   pruneTimer = null;
-  constructor(maxBufferLines = 1e4) {
+  transcripts;
+  constructor(maxBufferLines = 1e4, transcripts) {
     super();
     this.maxBufferLines = maxBufferLines;
+    this.transcripts = transcripts ?? new TranscriptWatcher();
+    this.transcripts.on("summary", (sessionId, summary) => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return;
+      const trimmed = summary.trim();
+      if (!trimmed || session.info.name === trimmed) return;
+      session.setName(trimmed);
+      this.emit("session-updated", sessionId, { name: trimmed });
+    });
   }
   // ────────────────────────────────────────────
   // Explicit kill (client-initiated)
@@ -1238,6 +1440,9 @@ var SessionManager = class extends import_events2.EventEmitter {
       this.pruneTimer = null;
     }
   }
+  stopTranscriptWatcher() {
+    this.transcripts.stopAll();
+  }
   /** Exposed for tests — runs one prune pass without scheduling. */
   _pruneOnce(idleMs) {
     const cutoff = Date.now() - idleMs;
@@ -1280,6 +1485,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     logger_default.info(
       `Session created: id=${session.id} pid=${pid} cwd=${cwd} name=${name}`
     );
+    this.transcripts.watch(session.id, cwd, session.info.startedAt);
     this.emit("session-added", session.info);
     return session;
   }
@@ -1297,6 +1503,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     });
     await session.spawn();
     logger_default.info(`Spawned session: id=${session.id} cwd=${cwd} name=${name}`);
+    this.transcripts.watch(session.id, cwd, session.info.startedAt);
     this.emit("session-added", session.info);
     return session;
   }
@@ -1305,6 +1512,23 @@ var SessionManager = class extends import_events2.EventEmitter {
    * the actual PTY and forwards I/O over `socket`.
    */
   createWrappedSession(pid, cwd, name, socket) {
+    if (pid > 0) {
+      const existingId = this.pidToSessionId.get(pid);
+      if (existingId) {
+        const existing = this.sessions.get(existingId);
+        if (existing) {
+          existing.promoteToWrap(socket);
+          logger_default.info(
+            `Wrapped session promoted: id=${existing.id} pid=${pid} cwd=${cwd}`
+          );
+          this.emit("session-updated", existing.id, {
+            owned: true,
+            status: "active"
+          });
+          return existing;
+        }
+      }
+    }
     const finalName = name ?? this.deriveName(cwd);
     const session = new Session(pid, cwd, finalName, this.maxBufferLines);
     session.attachWrapper(socket);
@@ -1318,6 +1542,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     logger_default.info(
       `Wrapped session created: id=${session.id} pid=${pid} cwd=${cwd} name=${finalName}`
     );
+    this.transcripts.watch(session.id, cwd, session.info.startedAt);
     this.emit("session-added", session.info);
     return session;
   }
@@ -1335,6 +1560,7 @@ var SessionManager = class extends import_events2.EventEmitter {
     const session = this.sessions.get(id);
     if (!session) return;
     this.pidToSessionId.delete(session.pid);
+    this.transcripts.unwatch(id);
     session.kill();
     this.sessions.delete(id);
     logger_default.info(`Session removed: id=${id}`);
@@ -1365,7 +1591,14 @@ var SessionManager = class extends import_events2.EventEmitter {
   // Helpers
   // ────────────────────────────────────────────
   deriveName(cwd) {
-    return path3.basename(cwd) || cwd;
+    const base = path4.basename(cwd) || cwd;
+    const used = /* @__PURE__ */ new Set();
+    for (const s of this.sessions.values()) used.add(s.info.name);
+    if (!used.has(base)) return base;
+    for (let i = 2; ; i++) {
+      const candidate = `${base} ${i}`;
+      if (!used.has(candidate)) return candidate;
+    }
   }
   /** Forward session 'data' events as session-updated metadata broadcasts. */
   wireSessionEvents(session) {
@@ -1386,11 +1619,11 @@ var SessionManager = class extends import_events2.EventEmitter {
 };
 
 // src/process-scanner.ts
-var import_events3 = require("events");
+var import_events4 = require("events");
 var fsp = __toESM(require("fs/promises"));
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 init_logger();
-var ProcessScanner = class extends import_events3.EventEmitter {
+var ProcessScanner = class extends import_events4.EventEmitter {
   interval = null;
   knownPids = /* @__PURE__ */ new Set();
   // ────────────────────────────────────────────
@@ -1457,15 +1690,18 @@ var ProcessScanner = class extends import_events3.EventEmitter {
   /**
    * Returns true if the process with `pid` is a `claude` process.
    * Reads /proc/{pid}/cmdline (null-byte separated argv).
+   *
+   * Only argv[0] (and argv[1] when argv[0] is a JS runtime) are inspected —
+   * scanning every argv element causes false positives like `walccy claude`
+   * (the wrap-cli wrapper), whose subcommand `claude` would otherwise match
+   * and produce a duplicate RO tab alongside the wrapped session.
    */
   async isClaude(pid) {
-    const cmdlinePath = path4.join("/proc", String(pid), "cmdline");
+    const cmdlinePath = path5.join("/proc", String(pid), "cmdline");
     try {
       const raw = await fsp.readFile(cmdlinePath, "utf8");
       const args = raw.split("\0").filter(Boolean);
-      return args.some((arg) => {
-        return arg === "claude" || /[/\\]claude(?:\.[jt]s)?$/.test(arg) || arg.endsWith("/claude");
-      });
+      return isClaudeProcessArgv(args);
     } catch {
       return false;
     }
@@ -1475,7 +1711,7 @@ var ProcessScanner = class extends import_events3.EventEmitter {
    * Returns null if not readable.
    */
   async readCwd(pid) {
-    const cwdLink = path4.join("/proc", String(pid), "cwd");
+    const cwdLink = path5.join("/proc", String(pid), "cwd");
     try {
       return await fsp.readlink(cwdLink);
     } catch {
@@ -1487,11 +1723,27 @@ var ProcessScanner = class extends import_events3.EventEmitter {
     return super.on(event, listener);
   }
 };
+function isClaudeProcessArgv(args) {
+  if (args.length === 0) return false;
+  if (isClaudeArg(args[0])) return true;
+  if (isJsRuntime(args[0]) && args.length >= 2 && isClaudeArg(args[1])) {
+    return true;
+  }
+  return false;
+}
+function isClaudeArg(arg) {
+  const base = arg.split(/[/\\]/).pop() ?? arg;
+  return base === "claude" || /^claude\.[jt]s$/.test(base);
+}
+function isJsRuntime(arg) {
+  const base = arg.split(/[/\\]/).pop() ?? arg;
+  return base === "node" || base === "bun" || base === "deno" || base === "npx";
+}
 
 // src/directory-scanner.ts
-var fs4 = __toESM(require("fs"));
-var path5 = __toESM(require("path"));
-var os3 = __toESM(require("os"));
+var fs5 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
+var os4 = __toESM(require("os"));
 init_logger();
 var COMMON_DEV_ROOTS = [
   "Documents",
@@ -1513,7 +1765,7 @@ var MAX_RESULTS = 80;
 var DirectoryScanner = class {
   homeDir;
   constructor() {
-    this.homeDir = os3.homedir();
+    this.homeDir = os4.homedir();
   }
   // ────────────────────────────────────────────
   // Public
@@ -1533,14 +1785,14 @@ var DirectoryScanner = class {
       if (!this.isReadableDir(cwd)) continue;
       out.push({
         path: cwd,
-        label: path5.basename(cwd) || cwd,
+        label: path6.basename(cwd) || cwd,
         kind: "recent",
         detail: this.friendlyParent(cwd)
       });
       seen.add(cwd);
     }
     for (const rel of COMMON_DEV_ROOTS) {
-      const root = path5.resolve(this.homeDir, rel);
+      const root = path6.resolve(this.homeDir, rel);
       if (!this.isReadableDir(root)) continue;
       this.findGitRepos(root, 0, seen, out);
       if (out.length >= MAX_RESULTS) break;
@@ -1566,12 +1818,12 @@ var DirectoryScanner = class {
     if (expanded === "~") {
       expanded = this.homeDir;
     } else if (expanded.startsWith("~/")) {
-      expanded = path5.join(this.homeDir, expanded.slice(2));
+      expanded = path6.join(this.homeDir, expanded.slice(2));
     }
-    const resolved = path5.resolve(expanded);
+    const resolved = path6.resolve(expanded);
     let real;
     try {
-      real = fs4.realpathSync.native(resolved);
+      real = fs5.realpathSync.native(resolved);
     } catch {
       return null;
     }
@@ -1581,7 +1833,7 @@ var DirectoryScanner = class {
   }
   /** True iff `p` is the user's home directory or a descendant. */
   isUnderHome(p) {
-    return p === this.homeDir || p.startsWith(this.homeDir + path5.sep);
+    return p === this.homeDir || p.startsWith(this.homeDir + path6.sep);
   }
   // ────────────────────────────────────────────
   // Internals
@@ -1591,7 +1843,7 @@ var DirectoryScanner = class {
     if (out.length >= MAX_RESULTS) return;
     let entries;
     try {
-      entries = fs4.readdirSync(root, { withFileTypes: true });
+      entries = fs5.readdirSync(root, { withFileTypes: true });
     } catch (err) {
       logger_default.debug(`directory-scanner: readdir failed for ${root}: ${String(err)}`);
       return;
@@ -1601,10 +1853,10 @@ var DirectoryScanner = class {
       if (visitedCount >= MAX_DIRS_PER_ROOT) break;
       if (entry.name.startsWith(".")) continue;
       if (entry.name === "node_modules") continue;
-      const full = path5.join(root, entry.name);
+      const full = path6.join(root, entry.name);
       let st;
       try {
-        st = fs4.lstatSync(full);
+        st = fs5.lstatSync(full);
       } catch {
         continue;
       }
@@ -1613,10 +1865,10 @@ var DirectoryScanner = class {
       const inode = `${st.dev}:${st.ino}`;
       if (visited.has(inode)) continue;
       visited.add(inode);
-      const gitDir = path5.join(full, ".git");
+      const gitDir = path6.join(full, ".git");
       let isRepo = false;
       try {
-        if (fs4.existsSync(gitDir)) isRepo = true;
+        if (fs5.existsSync(gitDir)) isRepo = true;
       } catch {
       }
       if (isRepo) {
@@ -1638,7 +1890,7 @@ var DirectoryScanner = class {
   }
   isReadableDir(p) {
     try {
-      const stat = fs4.statSync(p);
+      const stat = fs5.statSync(p);
       return stat.isDirectory();
     } catch {
       return false;
@@ -1646,9 +1898,9 @@ var DirectoryScanner = class {
   }
   /** Return parent path with $HOME collapsed to "~". */
   friendlyParent(p) {
-    const parent = path5.dirname(p);
+    const parent = path6.dirname(p);
     if (parent === this.homeDir) return "~";
-    if (parent.startsWith(this.homeDir + path5.sep)) {
+    if (parent.startsWith(this.homeDir + path6.sep)) {
       return "~" + parent.slice(this.homeDir.length);
     }
     return parent;
@@ -2395,7 +2647,7 @@ var WsServer = class {
 init_wrap_server();
 
 // src/push.ts
-var fs6 = __toESM(require("fs"));
+var fs7 = __toESM(require("fs"));
 var https = __toESM(require("https"));
 var crypto3 = __toESM(require("crypto"));
 init_logger();
@@ -2467,8 +2719,8 @@ var PushService = class {
   constructor(serviceAccountPath) {
     const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
     try {
-      if (fs6.existsSync(saPath)) {
-        const stat = fs6.statSync(saPath);
+      if (fs7.existsSync(saPath)) {
+        const stat = fs7.statSync(saPath);
         const looseBits = stat.mode & 63;
         if (looseBits !== 0) {
           const modeStr = (stat.mode & 511).toString(8).padStart(3, "0");
@@ -2476,7 +2728,7 @@ var PushService = class {
             `fcm-service-account.json mode is 0${modeStr} \u2014 readable by group/other. FCM private key should be 0600. Run: chmod 600 ${saPath}`
           );
         }
-        const raw = fs6.readFileSync(saPath, "utf-8");
+        const raw = fs7.readFileSync(saPath, "utf-8");
         this.serviceAccount = JSON.parse(raw);
         logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
       } else {
@@ -2500,11 +2752,11 @@ var PushService = class {
     if (!this.serviceAccount || this.pushTokens.size === 0) return;
     const token = await this.getToken();
     if (!token) return;
-    const promises = [];
+    const promises2 = [];
     for (const pushToken of this.pushTokens.values()) {
-      promises.push(this.sendOne(token, pushToken, title, body, data));
+      promises2.push(this.sendOne(token, pushToken, title, body, data));
     }
-    await Promise.allSettled(promises);
+    await Promise.allSettled(promises2);
   }
   async getToken() {
     if (!this.serviceAccount) return null;
@@ -2685,6 +2937,7 @@ var Daemon = class {
     logger_default.info("Walccy daemon stopping\u2026");
     this.processScanner?.stop();
     this.sessionManager?.stopIdlePrune();
+    this.sessionManager?.stopTranscriptWatcher();
     this.wsServer?.stop();
     await this.wrapServer?.stop();
     for (const session of this.sessionManager?.getAllSessions() ?? []) {
@@ -2695,21 +2948,21 @@ var Daemon = class {
 };
 
 // src/installer.ts
-var fs7 = __toESM(require("fs"));
-var path7 = __toESM(require("path"));
-var os5 = __toESM(require("os"));
+var fs8 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
+var os6 = __toESM(require("os"));
 var import_child_process2 = require("child_process");
 var import_util2 = require("util");
 var execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
 function getServiceDir() {
-  return path7.join(os5.homedir(), ".config", "systemd", "user");
+  return path8.join(os6.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path7.join(getServiceDir(), "walccy.service");
+  return path8.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path7.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path8.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -2732,10 +2985,10 @@ WantedBy=default.target
 async function installSystemdService() {
   const serviceDir = getServiceDir();
   const servicePath = getServicePath();
-  if (!fs7.existsSync(serviceDir)) {
-    fs7.mkdirSync(serviceDir, { recursive: true });
+  if (!fs8.existsSync(serviceDir)) {
+    fs8.mkdirSync(serviceDir, { recursive: true });
   }
-  fs7.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
+  fs8.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
   console.log(`Wrote systemd unit: ${servicePath}`);
   try {
     await execFileAsync2("systemctl", ["--user", "daemon-reload"]);
@@ -2759,8 +3012,8 @@ async function uninstallSystemdService() {
     await execFileAsync2("systemctl", ["--user", "disable", "walccy.service"]);
   } catch {
   }
-  if (fs7.existsSync(servicePath)) {
-    fs7.unlinkSync(servicePath);
+  if (fs8.existsSync(servicePath)) {
+    fs8.unlinkSync(servicePath);
     console.log(`Removed systemd unit: ${servicePath}`);
   } else {
     console.log("No systemd unit file found.");
@@ -2773,7 +3026,7 @@ async function uninstallSystemdService() {
 }
 async function getServiceStatus() {
   const servicePath = getServicePath();
-  if (!fs7.existsSync(servicePath)) {
+  if (!fs8.existsSync(servicePath)) {
     return "not-installed";
   }
   try {
@@ -2895,7 +3148,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os7.hostname();
+  const hostname2 = os8.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -2954,15 +3207,15 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path10.dirname(configPath);
-        const fs10 = await import("fs");
-        if (fs10.existsSync(configDir)) {
-          fs10.rmSync(configDir, { recursive: true, force: true });
+        const configDir = path11.dirname(configPath);
+        const fs11 = await import("fs");
+        if (fs11.existsSync(configDir)) {
+          fs11.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path10.join(os7.homedir(), ".walccy");
-        if (fs10.existsSync(logDir2)) {
-          fs10.rmSync(logDir2, { recursive: true, force: true });
+        const logDir2 = path11.join(os8.homedir(), ".walccy");
+        if (fs11.existsSync(logDir2)) {
+          fs11.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");

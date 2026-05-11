@@ -119,73 +119,116 @@ export async function runWrapper(argv: string[]): Promise<never> {
     process.exit(127);
   }
 
-  const socket = net.createConnection(getWrapSocketPath());
+  // ── Daemon socket with auto-reconnect ─────────────────────────
+  //
+  // The wrap-cli outlives any single daemon process (e.g. across a daemon
+  // upgrade/restart).  When the unix socket drops we keep the local PTY
+  // running and reconnect on backoff; on each reconnect we re-send REGISTER
+  // so the daemon promotes (or recreates) a writable session for our pid.
+  // While disconnected, output mirroring is silently dropped — only the
+  // user's local terminal is authoritative.
 
-  // ── Wrapper → daemon: REGISTER on connect, then OUTPUT as PTY produces it
-  socket.once('connect', () => {
-    socket.write(
-      JSON.stringify({
-        type: 'REGISTER',
-        pid: term.pid,
-        cwd: process.cwd(),
-        name: path.basename(process.cwd()) || process.cwd(),
-        cols,
-        rows,
-      }) + '\n'
-    );
-  });
-
+  let socket: net.Socket | null = null;
   let socketReady = false;
-  socket.on('data', (chunk) => {
-    let buffer = chunk.toString('utf8');
-    let nl: number;
-    while ((nl = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      let msg: DaemonToWrapper;
-      try {
-        msg = JSON.parse(line) as DaemonToWrapper;
-      } catch {
-        continue;
-      }
-      if (msg.type === 'REGISTERED') {
-        socketReady = true;
-      } else if (msg.type === 'INPUT' && msg.data) {
-        const data = Buffer.from(msg.data, 'base64').toString('utf8');
-        term.write(data);
-      } else if (msg.type === 'RESIZE' && msg.cols && msg.rows) {
-        try {
-          term.resize(msg.cols, msg.rows);
-        } catch {
-          // PTY already gone
-        }
-      }
-    }
-  });
-
-  socket.on('error', (err) => {
-    socketReady = false;
-    process.stderr.write(`\n[walccy] daemon socket error: ${err.message} (continuing without mirror)\n`);
-  });
-  socket.on('close', () => {
-    socketReady = false;
-  });
-
-  // ── PTY → user terminal AND daemon (with backpressure-aware mirror)
-  // Local stdout is never throttled; only the daemon mirror gets dropped
-  // when the kernel buffer is saturated, to keep wrapper RSS bounded.
-  const MAX_PENDING_BYTES = 1 * 1024 * 1024; // 1 MB
   let pendingBytes = 0;
   let warnedDropping = false;
-  socket.on('drain', () => {
-    pendingBytes = 0;
-    warnedDropping = false;
-  });
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectDelay = 500;
+  const MAX_RECONNECT_DELAY = 10_000;
+  const MAX_PENDING_BYTES = 1 * 1024 * 1024; // 1 MB
+  let shuttingDown = false;
+  let warnedDisconnect = false;
+
+  const registerPayload = (): string =>
+    JSON.stringify({
+      type: 'REGISTER',
+      pid: term.pid,
+      cwd: process.cwd(),
+      name: path.basename(process.cwd()) || process.cwd(),
+      cols,
+      rows,
+    }) + '\n';
+
+  function connect(): void {
+    if (shuttingDown) return;
+    const s = net.createConnection(getWrapSocketPath());
+    socket = s;
+
+    s.once('connect', () => {
+      reconnectDelay = 500;
+      warnedDisconnect = false;
+      s.write(registerPayload());
+    });
+
+    s.on('data', (chunk) => {
+      let buffer = chunk.toString('utf8');
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        let msg: DaemonToWrapper;
+        try {
+          msg = JSON.parse(line) as DaemonToWrapper;
+        } catch {
+          continue;
+        }
+        if (msg.type === 'REGISTERED') {
+          socketReady = true;
+        } else if (msg.type === 'INPUT' && msg.data) {
+          const data = Buffer.from(msg.data, 'base64').toString('utf8');
+          term.write(data);
+        } else if (msg.type === 'RESIZE' && msg.cols && msg.rows) {
+          try {
+            term.resize(msg.cols, msg.rows);
+          } catch {
+            // PTY already gone
+          }
+        }
+      }
+    });
+
+    s.on('drain', () => {
+      pendingBytes = 0;
+      warnedDropping = false;
+    });
+
+    s.on('error', () => {
+      // Suppress on every cycle — 'close' will follow and schedule the next
+      // attempt.  A single one-line warning is emitted from `scheduleReconnect`.
+      socketReady = false;
+    });
+
+    s.on('close', () => {
+      socketReady = false;
+      pendingBytes = 0;
+      if (socket === s) socket = null;
+      scheduleReconnect();
+    });
+  }
+
+  function scheduleReconnect(): void {
+    if (shuttingDown || reconnectTimer) return;
+    if (!warnedDisconnect) {
+      warnedDisconnect = true;
+      process.stderr.write(
+        '\n[walccy] daemon socket lost — reconnecting in background\n'
+      );
+    }
+    const delay = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+    reconnectTimer.unref();
+  }
+
+  connect();
 
   term.onData((data: string) => {
     process.stdout.write(data);
-    if (socketReady) {
+    if (socketReady && socket) {
       if (pendingBytes > MAX_PENDING_BYTES) {
         if (!warnedDropping) {
           warnedDropping = true;
@@ -235,7 +278,12 @@ export async function runWrapper(argv: string[]): Promise<never> {
           // already non-tty
         }
       }
-      if (socket.writable) {
+      shuttingDown = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (socket && socket.writable) {
         socket.write(JSON.stringify({ type: 'EXIT', exitCode }) + '\n');
         socket.end();
       }
