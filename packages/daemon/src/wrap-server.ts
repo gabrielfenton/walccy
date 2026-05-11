@@ -59,15 +59,36 @@ export class WrapServer {
       // best effort
     }
 
-    // Remove a stale socket file from a previous crashed run. Use try/catch
-    // (swallowing only ENOENT) instead of existsSync→unlinkSync so there is
-    // no TOCTOU window between the check and the unlink.
-    try {
-      fs.unlinkSync(this.socketPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        // best effort — log but don't fail; listen() will surface real problems.
-        logger.warn(`wrap: failed to remove stale socket: ${(err as Error).message}`);
+    // Probe before unlinking: if another daemon is already listening on this
+    // socket, ripping the file out from under it would leave both daemons in
+    // a broken state (the original keeps its FD on a now-unlinked inode, so
+    // new clients get ENOENT). Only unlink when the socket is demonstrably
+    // stale (ECONNREFUSED = no listener) or already gone (ENOENT).
+    const probeErr = await new Promise<NodeJS.ErrnoException | null>((resolve) => {
+      const probe = net.createConnection(this.socketPath);
+      probe.once('connect', () => {
+        probe.destroy();
+        resolve(null);
+      });
+      probe.once('error', (err) => {
+        probe.destroy();
+        resolve(err as NodeJS.ErrnoException);
+      });
+    });
+
+    if (probeErr === null) {
+      throw new Error(
+        `wrap: another daemon is already listening on ${this.socketPath} — refusing to start`
+      );
+    }
+
+    if (probeErr.code !== 'ENOENT') {
+      try {
+        fs.unlinkSync(this.socketPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logger.warn(`wrap: failed to remove stale socket: ${(err as Error).message}`);
+        }
       }
     }
 

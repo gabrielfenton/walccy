@@ -123,11 +123,29 @@ var init_wrap_server = __esm({
           fs5.chmodSync(dir, 448);
         } catch {
         }
-        try {
-          fs5.unlinkSync(this.socketPath);
-        } catch (err) {
-          if (err.code !== "ENOENT") {
-            logger_default.warn(`wrap: failed to remove stale socket: ${err.message}`);
+        const probeErr = await new Promise((resolve3) => {
+          const probe = net.createConnection(this.socketPath);
+          probe.once("connect", () => {
+            probe.destroy();
+            resolve3(null);
+          });
+          probe.once("error", (err) => {
+            probe.destroy();
+            resolve3(err);
+          });
+        });
+        if (probeErr === null) {
+          throw new Error(
+            `wrap: another daemon is already listening on ${this.socketPath} \u2014 refusing to start`
+          );
+        }
+        if (probeErr.code !== "ENOENT") {
+          try {
+            fs5.unlinkSync(this.socketPath);
+          } catch (err) {
+            if (err.code !== "ENOENT") {
+              logger_default.warn(`wrap: failed to remove stale socket: ${err.message}`);
+            }
           }
         }
         this.server = net.createServer((socket) => this.handleConnection(socket));
