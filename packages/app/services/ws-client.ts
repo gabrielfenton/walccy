@@ -204,6 +204,24 @@ class WsClient {
     this.sendUserMessage(sessionId, [{ type: 'text', text }]);
   }
 
+  // ── Legacy shims (kept until F6/F30 cleanup) ──
+  // The v1 protocol had `INPUT` and `RESIZE` top-level messages. Several
+  // existing components and hooks still call wsClient.sendInput / sendResize.
+  // For F5 we keep them functional by mapping sendInput → sendUserText (so
+  // anything that fed terminal input now ships a stream-json user turn) and
+  // making sendResize a no-op (the SDK has no concept of terminal size).
+  // F6 (Composer) replaces InputBar/ControlBar and F30 removes the remaining
+  // callers.
+  sendInput(sessionId: string, data: string): void {
+    const trimmed = data.endsWith('\n') ? data.slice(0, -1) : data;
+    if (!trimmed) return;
+    this.sendUserText(sessionId, trimmed);
+  }
+
+  sendResize(_sessionId: string, _cols: number, _rows: number): void {
+    // No-op: stream-json sessions don't have a terminal geometry.
+  }
+
   interrupt(sessionId: string): void {
     this.sendControl(sessionId, { type: 'interrupt' });
   }

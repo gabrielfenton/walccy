@@ -19,7 +19,7 @@ import { useSessionsStore } from '../../stores/sessions.store';
 import { wsClient } from '../../services/ws-client';
 import { clipboardService } from '../../services/clipboard.service';
 import { usePromptLibraryStore } from '../../stores/prompt-library.store';
-import { TerminalOutput } from '../../components/terminal/TerminalOutput';
+import { MessageList } from '../../components/chat/MessageList';
 import { ControlBar } from '../../components/terminal/ControlBar';
 import { InputBar } from '../../components/terminal/InputBar';
 import { InputLockBanner } from '../../components/terminal/InputLockBanner';
@@ -31,7 +31,6 @@ import { TextInputModal } from '../../components/ui/TextInputModal';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { useSettingsStore } from '../../stores/settings.store';
-import type { ServerMessage } from '@walccy/protocol';
 
 // ──────────────────────────────────────────────
 // Types
@@ -155,7 +154,9 @@ export default function TerminalSessionScreen(): React.ReactElement {
     }))
   );
 
-  const [inputLockState, setInputLockState] = useState<InputLockState>({
+  // InputLockState retained as a noop placeholder until F6 removes
+  // InputLockBanner entirely (v2 protocol has no INPUT_LOCK message).
+  const [inputLockState] = useState<InputLockState>({
     active: false,
     clientName: '',
   });
@@ -184,22 +185,8 @@ export default function TerminalSessionScreen(): React.ReactElement {
     };
   }, [sessionId, isNoSession, session]);
 
-  // ── INPUT_LOCK listener ───────────────────────
-
-  useEffect(() => {
-    if (isNoSession) return;
-
-    const unsubscribe = wsClient.onMessage((msg: ServerMessage) => {
-      if (msg.type === 'INPUT_LOCK' && msg.sessionId === sessionId) {
-        setInputLockState({
-          active: true,
-          clientName: msg.lockedByClientName,
-        });
-      }
-    });
-
-    return unsubscribe;
-  }, [sessionId, isNoSession]);
+  // (INPUT_LOCK listener removed — v2 protocol has no input-lock concept;
+  // a single daemon owns the stdin stream now.)
 
   // ── Vibrate when waiting for input ───────────
 
@@ -334,17 +321,12 @@ export default function TerminalSessionScreen(): React.ReactElement {
         />
       )}
 
-      {/* Main output area */}
+      {/* Main chat area */}
       {showEmpty ? (
         <EmptyState />
       ) : (
         <View style={styles.outputContainer}>
-          <TerminalOutput
-            sessionId={sessionId!}
-            fontSize={fontSize}
-            lineHeight={lineHeight}
-            onTextLongPress={handleTextLongPress}
-          />
+          <MessageList sessionId={sessionId!} />
         </View>
       )}
 
