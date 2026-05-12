@@ -1,637 +1,32 @@
 #!/usr/bin/env node
-"use strict";
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-};
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
-
-// src/logger.ts
-function setLogLevel(level) {
-  logger.level = level;
-}
-var winston, path2, os2, fs2, logDir, logFile, isForeground, transports2, logger, logger_default;
-var init_logger = __esm({
-  "src/logger.ts"() {
-    "use strict";
-    winston = __toESM(require("winston"));
-    path2 = __toESM(require("path"));
-    os2 = __toESM(require("os"));
-    fs2 = __toESM(require("fs"));
-    logDir = path2.join(os2.homedir(), ".walccy", "logs");
-    if (!fs2.existsSync(logDir)) {
-      fs2.mkdirSync(logDir, { recursive: true, mode: 448 });
-    }
-    try {
-      fs2.chmodSync(logDir, 448);
-    } catch {
-    }
-    logFile = path2.join(logDir, "daemon.log");
-    isForeground = process.env["WALCCY_FOREGROUND"] === "1";
-    transports2 = [
-      new winston.transports.File({
-        filename: logFile,
-        maxsize: 10 * 1024 * 1024,
-        // 10 MB
-        maxFiles: 3,
-        tailable: true,
-        // Forwarded to fs.createWriteStream so the log file lands at 0600.
-        options: { mode: 384 },
-        format: winston.format.combine(
-          winston.format.timestamp(),
-          winston.format.json()
-        )
-      })
-    ];
-    try {
-      if (fs2.existsSync(logFile)) {
-        fs2.chmodSync(logFile, 384);
-      }
-    } catch {
-    }
-    if (isForeground) {
-      transports2.push(
-        new winston.transports.Console({
-          format: winston.format.combine(
-            winston.format.colorize(),
-            winston.format.timestamp({ format: "HH:mm:ss" }),
-            winston.format.printf(({ level, message, timestamp, ...meta }) => {
-              const metaStr = Object.keys(meta).length ? " " + JSON.stringify(meta) : "";
-              return `${timestamp} [${level}] ${message}${metaStr}`;
-            })
-          )
-        })
-      );
-    }
-    logger = winston.createLogger({
-      level: process.env["WALCCY_LOG_LEVEL"] ?? "info",
-      transports: transports2
-    });
-    logger_default = logger;
-  }
-});
-
-// src/wrap-server.ts
-function getWrapSocketPath() {
-  return path7.join(os5.homedir(), ".walccy", "wrap.sock");
-}
-var fs6, net, os5, path7, WrapServer;
-var init_wrap_server = __esm({
-  "src/wrap-server.ts"() {
-    "use strict";
-    fs6 = __toESM(require("fs"));
-    net = __toESM(require("net"));
-    os5 = __toESM(require("os"));
-    path7 = __toESM(require("path"));
-    init_logger();
-    WrapServer = class {
-      constructor(sessionManager) {
-        this.sessionManager = sessionManager;
-        this.socketPath = getWrapSocketPath();
-      }
-      sessionManager;
-      server = null;
-      socketPath;
-      async start() {
-        const dir = path7.dirname(this.socketPath);
-        if (!fs6.existsSync(dir)) fs6.mkdirSync(dir, { recursive: true, mode: 448 });
-        try {
-          fs6.chmodSync(dir, 448);
-        } catch {
-        }
-        const probeErr = await new Promise((resolve3) => {
-          const probe = net.createConnection(this.socketPath);
-          probe.once("connect", () => {
-            probe.destroy();
-            resolve3(null);
-          });
-          probe.once("error", (err) => {
-            probe.destroy();
-            resolve3(err);
-          });
-        });
-        if (probeErr === null) {
-          throw new Error(
-            `wrap: another daemon is already listening on ${this.socketPath} \u2014 refusing to start`
-          );
-        }
-        if (probeErr.code !== "ENOENT") {
-          try {
-            fs6.unlinkSync(this.socketPath);
-          } catch (err) {
-            if (err.code !== "ENOENT") {
-              logger_default.warn(`wrap: failed to remove stale socket: ${err.message}`);
-            }
-          }
-        }
-        this.server = net.createServer((socket) => this.handleConnection(socket));
-        await new Promise((resolve3, reject) => {
-          if (!this.server) return reject(new Error("server not initialized"));
-          this.server.once("error", reject);
-          this.server.listen(this.socketPath, () => {
-            fs6.chmodSync(this.socketPath, 384);
-            resolve3();
-          });
-        });
-        logger_default.info(`Wrap IPC listening on ${this.socketPath}`);
-      }
-      async stop() {
-        if (!this.server) return;
-        await new Promise((resolve3) => this.server.close(() => resolve3()));
-        if (fs6.existsSync(this.socketPath)) {
-          try {
-            fs6.unlinkSync(this.socketPath);
-          } catch {
-          }
-        }
-        this.server = null;
-      }
-      handleConnection(socket) {
-        let session = null;
-        let buffer = "";
-        socket.on("data", (chunk) => {
-          buffer += chunk.toString("utf8");
-          let newline;
-          while ((newline = buffer.indexOf("\n")) !== -1) {
-            const line = buffer.slice(0, newline);
-            buffer = buffer.slice(newline + 1);
-            if (!line) continue;
-            let msg;
-            try {
-              msg = JSON.parse(line);
-            } catch {
-              logger_default.warn(`wrap: malformed JSON from wrapper: ${line.slice(0, 120)}`);
-              continue;
-            }
-            if (msg.type === "REGISTER") {
-              if (session) {
-                logger_default.warn("wrap: REGISTER received twice on the same socket");
-                continue;
-              }
-              session = this.sessionManager.createWrappedSession(
-                msg.pid,
-                msg.cwd,
-                msg.name,
-                socket
-              );
-              socket.write(JSON.stringify({ type: "REGISTERED", sessionId: session.id }) + "\n");
-            } else if (msg.type === "OUTPUT") {
-              if (!session) {
-                logger_default.warn("wrap: OUTPUT before REGISTER, dropping");
-                continue;
-              }
-              const data = Buffer.from(msg.data, "base64").toString("utf8");
-              session.pushExternalData(data);
-            } else if (msg.type === "EXIT") {
-              if (session) this.sessionManager.removeSession(session.id);
-              session = null;
-              socket.end();
-            }
-          }
-        });
-        socket.on("close", () => {
-          if (session && this.sessionManager.getSession(session.id)) {
-            this.sessionManager.removeSession(session.id);
-          }
-          session = null;
-        });
-        socket.on("error", (err) => {
-          logger_default.warn(`wrap: socket error: ${err.message}`);
-        });
-      }
-    };
-  }
-});
-
-// src/shell-installer.ts
-var shell_installer_exports = {};
-__export(shell_installer_exports, {
-  WRAPPED_ENV_VAR: () => WRAPPED_ENV_VAR,
-  installShellIntegration: () => installShellIntegration,
-  stripAllBlocks: () => stripAllBlocks,
-  uninstallShellIntegration: () => uninstallShellIntegration
-});
-function buildSnippet() {
-  return [
-    BEGIN,
-    VERSION_TAG,
-    "# Auto-wrap `claude` so output is mirrored to the walccy daemon.",
-    "# Skipped when " + WRAPPED_ENV_VAR + "=1 (already inside a wrap),",
-    "# or when walccy/claude are not on PATH.",
-    "claude() {",
-    '  if [ -n "${' + WRAPPED_ENV_VAR + ':-}" ]; then',
-    '    command claude "$@"',
-    "    return",
-    "  fi",
-    "  if ! command -v walccy >/dev/null 2>&1 || ! command -v claude >/dev/null 2>&1; then",
-    '    command claude "$@"',
-    "    return",
-    "  fi",
-    '  walccy wrap claude "$@"',
-    "}",
-    END,
-    ""
-  ].join("\n");
-}
-function candidateRcFiles(home = os7.homedir()) {
-  return [
-    { path: path9.join(home, ".bashrc"), shell: "bash" },
-    { path: path9.join(home, ".zshrc"), shell: "zsh" }
-  ];
-}
-function stripAllBlocks(content) {
-  let out = content;
-  while (true) {
-    const beginIdx = out.indexOf(BEGIN);
-    if (beginIdx === -1) break;
-    const endIdx = out.indexOf(END, beginIdx);
-    let cutEnd;
-    if (endIdx === -1) {
-      cutEnd = out.length;
-    } else {
-      cutEnd = endIdx + END.length;
-    }
-    let cutStart = beginIdx;
-    if (cutStart > 0 && out[cutStart - 1] === "\n") cutStart -= 1;
-    let trailing = cutEnd;
-    if (trailing < out.length && out[trailing] === "\n") trailing += 1;
-    out = out.slice(0, cutStart) + (cutStart > 0 ? "\n" : "") + out.slice(trailing);
-  }
-  return out;
-}
-function safeRewrite(filePath, nextContent) {
-  const lst = fs9.lstatSync(filePath);
-  if (lst.isSymbolicLink()) {
-    throw new Error(`refusing to follow symlink: ${filePath}`);
-  }
-  const mode = lst.mode & 511;
-  const dir = path9.dirname(filePath);
-  const tmp = path9.join(dir, `.${path9.basename(filePath)}.walccy.${process.pid}.tmp`);
-  fs9.writeFileSync(tmp, nextContent, { encoding: "utf8", mode });
-  try {
-    fs9.renameSync(tmp, filePath);
-  } catch (err) {
-    try {
-      fs9.unlinkSync(tmp);
-    } catch {
-    }
-    throw err;
-  }
-}
-function installShellIntegration(home = os7.homedir()) {
-  const result = { modified: [], skipped: [] };
-  const snippet = buildSnippet();
-  for (const rc of candidateRcFiles(home)) {
-    if (!fs9.existsSync(rc.path)) {
-      result.skipped.push(`${rc.path} (does not exist)`);
-      continue;
-    }
-    try {
-      const original = fs9.readFileSync(rc.path, "utf8");
-      const stripped = stripAllBlocks(original);
-      const needsLeadingNl = stripped.length > 0 && !stripped.endsWith("\n");
-      const next = stripped + (needsLeadingNl ? "\n" : "") + snippet;
-      if (next === original) {
-        result.skipped.push(`${rc.path} (already up to date)`);
-        continue;
-      }
-      safeRewrite(rc.path, next);
-      result.modified.push(rc.path);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result.skipped.push(`${rc.path} (${msg})`);
-    }
-  }
-  return result;
-}
-function uninstallShellIntegration(home = os7.homedir()) {
-  const result = { modified: [], skipped: [] };
-  for (const rc of candidateRcFiles(home)) {
-    if (!fs9.existsSync(rc.path)) {
-      result.skipped.push(`${rc.path} (does not exist)`);
-      continue;
-    }
-    try {
-      const original = fs9.readFileSync(rc.path, "utf8");
-      const stripped = stripAllBlocks(original);
-      if (stripped === original) {
-        result.skipped.push(`${rc.path} (no walccy block found)`);
-        continue;
-      }
-      safeRewrite(rc.path, stripped);
-      result.modified.push(rc.path);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result.skipped.push(`${rc.path} (${msg})`);
-    }
-  }
-  return result;
-}
-var fs9, os7, path9, WRAPPED_ENV_VAR, BEGIN, END, VERSION_TAG;
-var init_shell_installer = __esm({
-  "src/shell-installer.ts"() {
-    "use strict";
-    fs9 = __toESM(require("fs"));
-    os7 = __toESM(require("os"));
-    path9 = __toESM(require("path"));
-    WRAPPED_ENV_VAR = "WALCCY_WRAPPED";
-    BEGIN = "# >>> walccy shell integration >>>";
-    END = "# <<< walccy shell integration <<<";
-    VERSION_TAG = "# walccy-shell-integration v1";
-  }
-});
-
-// src/wrap-cli.ts
-var wrap_cli_exports = {};
-__export(wrap_cli_exports, {
-  findInPath: () => findInPath,
-  runWrapper: () => runWrapper
-});
-function findInPath(cmd) {
-  if (cmd.includes("/")) {
-    try {
-      fs10.accessSync(cmd, fs10.constants.X_OK);
-      return cmd;
-    } catch {
-      return null;
-    }
-  }
-  const PATH = process.env["PATH"] ?? "";
-  for (const dir of PATH.split(":")) {
-    if (!dir) continue;
-    const full = path10.join(dir, cmd);
-    try {
-      fs10.accessSync(full, fs10.constants.X_OK);
-      return full;
-    } catch {
-    }
-  }
-  return null;
-}
-async function runWrapper(argv) {
-  if (argv.length === 0) argv = ["claude"];
-  const cmd = argv[0];
-  const args = argv.slice(1);
-  const restoreTty = () => {
-    if (process.stdin.isTTY) {
-      try {
-        process.stdin.setRawMode(false);
-      } catch {
-      }
-    }
-  };
-  process.on("exit", restoreTty);
-  process.on("uncaughtException", (err) => {
-    restoreTty();
-    console.error(err);
-    process.exit(1);
-  });
-  process.on("SIGINT", () => {
-    restoreTty();
-    process.exit(130);
-  });
-  process.on("SIGTERM", () => {
-    restoreTty();
-    process.exit(143);
-  });
-  if (!findInPath(cmd)) {
-    process.stderr.write(`walccy: command not found: ${cmd}
-`);
-    process.exit(127);
-  }
-  const pty = require("node-pty");
-  const cols = process.stdout.columns ?? 80;
-  const rows = process.stdout.rows ?? 24;
-  let term;
-  try {
-    term = pty.spawn(cmd, args, {
-      name: "xterm-256color",
-      cols,
-      rows,
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        [WRAPPED_ENV_VAR]: "1"
-      }
-    });
-  } catch (err) {
-    restoreTty();
-    const e = err;
-    if (e && e.code === "ENOENT") {
-      process.stderr.write(`walccy: command not found: ${cmd}
-`);
-    } else {
-      const msg = e && e.message || String(err);
-      process.stderr.write(`walccy: failed to spawn ${cmd}: ${msg}
-`);
-    }
-    process.exit(127);
-  }
-  let socket = null;
-  let socketReady = false;
-  let pendingBytes = 0;
-  let warnedDropping = false;
-  let reconnectTimer = null;
-  let reconnectDelay = 500;
-  const MAX_RECONNECT_DELAY = 1e4;
-  const MAX_PENDING_BYTES = 1 * 1024 * 1024;
-  let shuttingDown = false;
-  let warnedDisconnect = false;
-  const registerPayload = () => JSON.stringify({
-    type: "REGISTER",
-    pid: term.pid,
-    cwd: process.cwd(),
-    name: path10.basename(process.cwd()) || process.cwd(),
-    cols,
-    rows
-  }) + "\n";
-  function connect() {
-    if (shuttingDown) return;
-    const s = net2.createConnection(getWrapSocketPath());
-    socket = s;
-    s.once("connect", () => {
-      reconnectDelay = 500;
-      warnedDisconnect = false;
-      s.write(registerPayload());
-    });
-    s.on("data", (chunk) => {
-      let buffer = chunk.toString("utf8");
-      let nl;
-      while ((nl = buffer.indexOf("\n")) !== -1) {
-        const line = buffer.slice(0, nl);
-        buffer = buffer.slice(nl + 1);
-        if (!line) continue;
-        let msg;
-        try {
-          msg = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (msg.type === "REGISTERED") {
-          socketReady = true;
-        } else if (msg.type === "INPUT" && msg.data) {
-          const data = Buffer.from(msg.data, "base64").toString("utf8");
-          term.write(data);
-        } else if (msg.type === "RESIZE" && msg.cols && msg.rows) {
-          try {
-            term.resize(msg.cols, msg.rows);
-          } catch {
-          }
-        }
-      }
-    });
-    s.on("drain", () => {
-      pendingBytes = 0;
-      warnedDropping = false;
-    });
-    s.on("error", () => {
-      socketReady = false;
-    });
-    s.on("close", () => {
-      socketReady = false;
-      pendingBytes = 0;
-      if (socket === s) socket = null;
-      scheduleReconnect();
-    });
-  }
-  function scheduleReconnect() {
-    if (shuttingDown || reconnectTimer) return;
-    if (!warnedDisconnect) {
-      warnedDisconnect = true;
-      process.stderr.write(
-        "\n[walccy] daemon socket lost \u2014 reconnecting in background\n"
-      );
-    }
-    const delay2 = reconnectDelay;
-    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay2);
-    reconnectTimer.unref();
-  }
-  connect();
-  term.onData((data) => {
-    process.stdout.write(data);
-    if (socketReady && socket) {
-      if (pendingBytes > MAX_PENDING_BYTES) {
-        if (!warnedDropping) {
-          warnedDropping = true;
-          process.stderr.write("\n[walccy] mirror dropping frames (daemon stalled)\n");
-        }
-        return;
-      }
-      const payload = JSON.stringify({
-        type: "OUTPUT",
-        data: Buffer.from(data, "utf8").toString("base64")
-      }) + "\n";
-      const flushed = socket.write(payload);
-      if (!flushed) {
-        pendingBytes += Buffer.byteLength(payload);
-      }
-    }
-  });
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-  }
-  process.stdin.resume();
-  process.stdin.on("data", (b) => {
-    term.write(b.toString("utf8"));
-  });
-  process.on("SIGWINCH", () => {
-    const c = process.stdout.columns ?? 80;
-    const r = process.stdout.rows ?? 24;
-    try {
-      term.resize(c, r);
-    } catch {
-    }
-  });
-  await new Promise((resolve3) => {
-    term.onExit(({ exitCode }) => {
-      if (process.stdin.isTTY) {
-        try {
-          process.stdin.setRawMode(false);
-        } catch {
-        }
-      }
-      shuttingDown = true;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      if (socket && socket.writable) {
-        socket.write(JSON.stringify({ type: "EXIT", exitCode }) + "\n");
-        socket.end();
-      }
-      setTimeout(() => {
-        process.exit(exitCode);
-      }, 50);
-      resolve3();
-    });
-  });
-  return void 0;
-}
-var fs10, net2, path10;
-var init_wrap_cli = __esm({
-  "src/wrap-cli.ts"() {
-    "use strict";
-    fs10 = __toESM(require("fs"));
-    net2 = __toESM(require("net"));
-    path10 = __toESM(require("path"));
-    init_wrap_server();
-    init_shell_installer();
-  }
-});
 
 // src/index.ts
-var import_commander = require("commander");
-var crypto4 = __toESM(require("crypto"));
-var os8 = __toESM(require("os"));
-var path11 = __toESM(require("path"));
+import { Command } from "commander";
+import * as crypto4 from "crypto";
+import * as os6 from "os";
+import * as path7 from "path";
 
 // package.json
 var package_default = {
   name: "walccyd",
-  version: "1.0.0",
+  version: "2.0.0-alpha.1",
   private: true,
+  type: "module",
   bin: {
     walccy: "./dist/index.js"
   },
   main: "./dist/index.js",
   scripts: {
     dev: "tsx watch src/index.ts",
-    build: "tsup src/index.ts --format cjs --dts",
+    build: "tsup src/index.ts --format esm --dts",
     start: "node dist/index.js",
-    test: "vitest run"
+    test: "vitest run",
+    typecheck: "tsc --noEmit"
   },
   dependencies: {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.138",
     "@walccy/protocol": "*",
     commander: "^12.1.0",
-    "node-pty": "^1.0.0",
     "qrcode-terminal": "^0.12.0",
     uuid: "^10.0.0",
     winston: "^3.13.0",
@@ -649,10 +44,10 @@ var package_default = {
 };
 
 // src/config.ts
-var fs = __toESM(require("fs"));
-var path = __toESM(require("path"));
-var os = __toESM(require("os"));
-var crypto = __toESM(require("crypto"));
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import * as crypto from "crypto";
 var DEFAULTS = {
   port: 7779,
   maxBufferLines: 1e4,
@@ -710,165 +105,915 @@ function saveConfig(config) {
 }
 
 // src/session-manager.ts
-var import_events3 = require("events");
-var path4 = __toESM(require("path"));
+import { EventEmitter as EventEmitter4 } from "events";
+import * as path4 from "path";
 
 // src/session.ts
-var import_events = require("events");
-var fs3 = __toESM(require("fs"));
-var import_uuid = require("uuid");
+import { EventEmitter as EventEmitter2 } from "events";
+import { v4 as uuidv4 } from "uuid";
 
-// src/buffer.ts
-var ANSI_REGEX = (
-  // eslint-disable-next-line no-control-regex
-  /(?:\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f])/g
-);
-function stripAnsi(str) {
-  return str.replace(ANSI_REGEX, "");
+// src/claude-driver.ts
+import { EventEmitter } from "events";
+import { randomUUID } from "crypto";
+import { execFileSync } from "child_process";
+import * as fs3 from "fs";
+import {
+  query
+} from "@anthropic-ai/claude-agent-sdk";
+
+// src/stream-translator.ts
+function translate(msg, _ctx) {
+  switch (msg.type) {
+    case "system":
+      return translateSystem(msg);
+    case "assistant":
+      return translateAssistant(msg);
+    case "user":
+      return translateUser(msg);
+    case "stream_event":
+      return translateStreamEvent(msg);
+    case "result":
+      return [translateResult(msg)];
+    case "rate_limit_event":
+      return [translateRateLimit(msg)];
+    case "tool_progress":
+      return [translateToolProgress(msg)];
+    default:
+      return translateFallback(msg);
+  }
 }
-var LineBuffer = class {
-  /** Fixed-size ring buffer. Slots may be undefined until filled. */
+function translateSystem(msg) {
+  const sub = msg.subtype;
+  switch (sub) {
+    case "init":
+      return [translateInit(msg)];
+    case "status":
+      return [translateStatus(msg)];
+    case "compact_boundary":
+      return [translateCompactBoundary(msg)];
+    case "task_started":
+      return [translateTaskStarted(msg)];
+    case "task_progress":
+      return [translateTaskProgress(msg)];
+    case "task_updated":
+      return [translateTaskUpdated(msg)];
+    case "task_notification":
+      return [translateTaskNotification(msg)];
+    case "plugin_install":
+      return [translatePluginInstall(msg)];
+    case "memory_recall":
+      return translateMemoryRecall(msg);
+    case "permission_denied":
+      return [translatePermissionDenied(msg)];
+    case "elicitation_complete":
+      return [translateElicitationComplete(msg)];
+    case "hook_started":
+      return [translateHookStarted(msg)];
+    case "hook_progress":
+      return [translateHookProgress(msg)];
+    case "hook_response":
+      return [translateHookResponse(msg)];
+    case "mirror_error":
+      return [translateMirrorError(msg)];
+    default:
+      return [];
+  }
+}
+function translateInit(msg) {
+  const agents = (msg.agents ?? []).map((name) => ({
+    name
+  }));
+  const mcpServers = (msg.mcp_servers ?? []).map(
+    (s) => ({
+      name: s.name,
+      status: s.status
+    })
+  );
+  return {
+    kind: "init",
+    sessionId: msg.session_id,
+    model: msg.model,
+    cwd: msg.cwd,
+    tools: msg.tools,
+    agents,
+    skills: msg.skills,
+    slashCommands: msg.slash_commands,
+    mcpServers,
+    plugins: msg.plugins.map((p) => ({ name: p.name, path: p.path })),
+    permissionMode: msg.permissionMode,
+    memoryPaths: {},
+    outputStyle: msg.output_style,
+    claudeCodeVersion: msg.claude_code_version
+  };
+}
+function translateStatus(msg) {
+  const status = msg.status === null ? "idle" : msg.status === "requesting" || msg.status === "compacting" ? msg.status : "idle";
+  return {
+    kind: "status",
+    status,
+    permissionMode: msg.permissionMode
+  };
+}
+function translateCompactBoundary(msg) {
+  return {
+    kind: "compact_boundary",
+    trigger: msg.compact_metadata.trigger,
+    preTokens: msg.compact_metadata.pre_tokens,
+    postTokens: msg.compact_metadata.post_tokens,
+    durationMs: msg.compact_metadata.duration_ms
+  };
+}
+function translateTaskStarted(msg) {
+  return {
+    kind: "task_started",
+    taskId: msg.task_id,
+    parentToolUseId: msg.tool_use_id,
+    description: msg.description
+  };
+}
+function translateTaskProgress(msg) {
+  return {
+    kind: "task_progress",
+    taskId: msg.task_id,
+    message: msg.description
+  };
+}
+function translateTaskUpdated(msg) {
+  return {
+    kind: "task_updated",
+    taskId: msg.task_id,
+    status: msg.patch.status ?? "running",
+    description: msg.patch.description,
+    error: msg.patch.error,
+    isBackgrounded: msg.patch.is_backgrounded
+  };
+}
+function translateTaskNotification(msg) {
+  return {
+    kind: "task_updated",
+    taskId: msg.task_id,
+    status: msg.status,
+    description: msg.summary
+  };
+}
+function translatePluginInstall(msg) {
+  const m = msg;
+  return {
+    kind: "plugin_install",
+    pluginId: m.plugin_id ?? m.pluginId ?? "unknown",
+    status: m.status ?? "installing",
+    message: m.message
+  };
+}
+function translateMemoryRecall(msg) {
+  const m = msg;
+  const out = [];
+  for (const mem of m.memories ?? []) {
+    out.push({ kind: "memory_recall", path: mem.path, summary: mem.summary });
+  }
+  return out;
+}
+function translatePermissionDenied(msg) {
+  const m = msg;
+  const reason = m.reason === "auto_deny" || m.reason === "user_reject" || m.reason === "hook_deny" || m.reason === "rule_deny" ? m.reason : "other";
+  return {
+    kind: "permission_denied",
+    toolUseId: m.tool_use_id ?? "",
+    toolName: m.tool_name ?? "",
+    reason,
+    detail: m.detail
+  };
+}
+function translateElicitationComplete(msg) {
+  const m = msg;
+  return {
+    kind: "elicitation_complete",
+    toolUseId: m.tool_use_id ?? "",
+    result: m.result
+  };
+}
+function translateHookStarted(msg) {
+  const m = msg;
+  return {
+    kind: "hook_started",
+    hookId: m.hook_id ?? m.hookId ?? "",
+    event: m.event,
+    toolUseId: m.tool_use_id,
+    matcher: m.matcher
+  };
+}
+function translateHookProgress(msg) {
+  const m = msg;
+  return {
+    kind: "hook_progress",
+    hookId: m.hook_id ?? m.hookId ?? "",
+    message: m.message ?? "",
+    data: m.data
+  };
+}
+function translateHookResponse(msg) {
+  const m = msg;
+  return {
+    kind: "hook_response",
+    hookId: m.hook_id ?? m.hookId ?? "",
+    decision: m.decision,
+    reason: m.reason
+  };
+}
+function translateMirrorError(msg) {
+  const m = msg;
+  return {
+    kind: "error",
+    code: m.code ?? "mirror_error",
+    message: m.message ?? "mirror error",
+    fatal: m.fatal ?? false
+  };
+}
+function translateAssistant(msg) {
+  const out = [];
+  const messageId = typeof msg.message?.id === "string" ? msg.message.id : "unknown";
+  const content = Array.isArray(msg.message?.content) ? msg.message.content : [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const type = block.type;
+    if (type === "text") {
+      const text = block.text ?? "";
+      out.push({ kind: "assistant_text_done", messageId, fullText: text });
+    } else if (type === "thinking") {
+      const text = block.thinking ?? "";
+      out.push({ kind: "thinking_done", messageId, fullText: text });
+    } else if (type === "tool_use") {
+      const tu = block;
+      out.push({
+        kind: "tool_use",
+        messageId,
+        toolUseId: tu.id ?? "",
+        name: tu.name ?? "",
+        input: tu.input ?? {},
+        parentToolUseId: msg.parent_tool_use_id ?? null
+      });
+    }
+  }
+  return out;
+}
+function translateUser(msg) {
+  const content = Array.isArray(msg.message?.content) ? msg.message.content : [];
+  const out = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    if (block.type !== "tool_result") continue;
+    const tr = block;
+    out.push({
+      kind: "tool_result",
+      toolUseId: tr.tool_use_id ?? "",
+      content: tr.content,
+      isError: tr.is_error ?? false,
+      structured: extractStructured(msg.tool_use_result)
+    });
+  }
+  return out;
+}
+function extractStructured(raw) {
+  if (!raw || typeof raw !== "object") return void 0;
+  const r = raw;
+  const out = {};
+  if (typeof r.stdout === "string") out.stdout = r.stdout;
+  if (typeof r.stderr === "string") out.stderr = r.stderr;
+  if (typeof r.exitCode === "number") out.exitCode = r.exitCode;
+  if (typeof r.isImage === "boolean") out.isImage = r.isImage;
+  if (typeof r.interrupted === "boolean") out.interrupted = r.interrupted;
+  if (typeof r.noOutputExpected === "boolean") {
+    out.noOutputExpected = r.noOutputExpected;
+  }
+  return Object.keys(out).length === 0 ? void 0 : out;
+}
+function translateStreamEvent(msg) {
+  const inner = msg.event;
+  const parent = msg;
+  const messageId = parent?.uuid ?? "";
+  if (!inner || typeof inner !== "object") return [];
+  if (inner.type === "content_block_delta" && "delta" in inner) {
+    const delta = inner.delta;
+    if (delta.type === "text_delta" && "text" in delta) {
+      return [
+        {
+          kind: "assistant_text_delta",
+          messageId,
+          text: delta.text
+        }
+      ];
+    }
+    if (delta.type === "thinking_delta" && "thinking" in delta) {
+      return [
+        {
+          kind: "thinking_delta",
+          messageId,
+          text: delta.thinking
+        }
+      ];
+    }
+  }
+  return [];
+}
+function translateResult(msg) {
+  const isSuccess = msg.subtype === "success";
+  const successUsage = isSuccess ? msg.usage : null;
+  return {
+    kind: "turn_complete",
+    stopReason: msg.stop_reason,
+    durationMs: msg.duration_ms,
+    cost: {
+      total: msg.total_cost_usd ?? 0,
+      inputTokens: successUsage?.input_tokens ?? 0,
+      outputTokens: successUsage?.output_tokens ?? 0,
+      cacheReadTokens: successUsage?.cache_read_input_tokens,
+      cacheCreateTokens: successUsage?.cache_creation_input_tokens
+    },
+    modelUsage: msg.modelUsage,
+    permissionDenials: isSuccess ? msg.permission_denials : void 0,
+    isError: msg.is_error,
+    result: isSuccess ? msg.result : void 0
+  };
+}
+function translateRateLimit(msg) {
+  return {
+    kind: "rate_limit",
+    info: {
+      status: msg.rate_limit_info.status,
+      resetsAt: msg.rate_limit_info.resetsAt,
+      rateLimitType: msg.rate_limit_info.rateLimitType,
+      utilization: msg.rate_limit_info.utilization,
+      overageStatus: msg.rate_limit_info.overageStatus,
+      overageResetsAt: msg.rate_limit_info.overageResetsAt,
+      isUsingOverage: msg.rate_limit_info.isUsingOverage,
+      surpassedThreshold: msg.rate_limit_info.surpassedThreshold
+    }
+  };
+}
+function translateToolProgress(msg) {
+  const m = msg;
+  return {
+    kind: "tool_progress",
+    toolUseId: m.tool_use_id ?? "",
+    progress: m.progress ?? 0,
+    message: m.message
+  };
+}
+function translateFallback(_msg) {
+  return [];
+}
+function buildPermissionRequest(args) {
+  return {
+    kind: "permission_request",
+    requestId: args.requestId,
+    toolUseId: args.toolUseId,
+    toolName: args.toolName,
+    input: args.input,
+    title: args.title,
+    description: args.description,
+    suggestions: args.suggestions,
+    agentId: args.agentId
+  };
+}
+
+// src/logger.ts
+import * as winston from "winston";
+import * as path2 from "path";
+import * as os2 from "os";
+import * as fs2 from "fs";
+var logDir = path2.join(os2.homedir(), ".walccy", "logs");
+if (!fs2.existsSync(logDir)) {
+  fs2.mkdirSync(logDir, { recursive: true, mode: 448 });
+}
+try {
+  fs2.chmodSync(logDir, 448);
+} catch {
+}
+var logFile = path2.join(logDir, "daemon.log");
+var isForeground = process.env["WALCCY_FOREGROUND"] === "1";
+var transports2 = [
+  new winston.transports.File({
+    filename: logFile,
+    maxsize: 10 * 1024 * 1024,
+    // 10 MB
+    maxFiles: 3,
+    tailable: true,
+    // Forwarded to fs.createWriteStream so the log file lands at 0600.
+    options: { mode: 384 },
+    format: winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.json()
+    )
+  })
+];
+try {
+  if (fs2.existsSync(logFile)) {
+    fs2.chmodSync(logFile, 384);
+  }
+} catch {
+}
+if (isForeground) {
+  transports2.push(
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.timestamp({ format: "HH:mm:ss" }),
+        winston.format.printf(({ level, message, timestamp, ...meta }) => {
+          const metaStr = Object.keys(meta).length ? " " + JSON.stringify(meta) : "";
+          return `${timestamp} [${level}] ${message}${metaStr}`;
+        })
+      )
+    })
+  );
+}
+var logger = winston.createLogger({
+  level: process.env["WALCCY_LOG_LEVEL"] ?? "info",
+  transports: transports2
+});
+function setLogLevel(level) {
+  logger.level = level;
+}
+var logger_default = logger;
+
+// src/claude-driver.ts
+var cachedClaudePath;
+function resolveClaudePath() {
+  if (cachedClaudePath !== void 0) return cachedClaudePath || void 0;
+  const override = process.env["WALCCY_CLAUDE_PATH"];
+  if (override && fs3.existsSync(override)) {
+    cachedClaudePath = override;
+    return cachedClaudePath;
+  }
+  try {
+    const out = execFileSync("which", ["claude"], { encoding: "utf8" }).trim();
+    if (out && fs3.existsSync(out)) {
+      cachedClaudePath = out;
+      logger_default.info(`ClaudeDriver: resolved claude binary \u2192 ${out}`);
+      return cachedClaudePath;
+    }
+  } catch {
+  }
+  cachedClaudePath = "";
+  return void 0;
+}
+var UserMessageQueue = class {
+  buffer = [];
+  waiter = null;
+  closed = false;
+  push(msg) {
+    if (this.closed) {
+      logger_default.warn("UserMessageQueue: push after close \u2014 dropping message");
+      return;
+    }
+    if (this.waiter) {
+      const w = this.waiter;
+      this.waiter = null;
+      w(msg);
+    } else {
+      this.buffer.push(msg);
+    }
+  }
+  close() {
+    this.closed = true;
+    if (this.waiter) {
+      const w = this.waiter;
+      this.waiter = null;
+      w(null);
+    }
+  }
+  async *iter(sessionId) {
+    while (true) {
+      let next;
+      if (this.buffer.length > 0) {
+        next = this.buffer.shift();
+      } else if (this.closed) {
+        return;
+      } else {
+        next = await new Promise((resolve3) => {
+          this.waiter = resolve3;
+        });
+      }
+      if (next === null) return;
+      const userMsg = {
+        type: "user",
+        message: {
+          role: "user",
+          // The block shapes carried by walccy match Anthropic's MessageParam
+          // content types at runtime; the cast is necessary because their
+          // public TS shape uses branded discriminants from a different
+          // import path.
+          content: next.content
+        },
+        parent_tool_use_id: next.parent_tool_use_id ?? null,
+        session_id: sessionId()
+      };
+      yield userMsg;
+    }
+  }
+};
+var ClaudeDriver = class extends EventEmitter {
+  constructor(opts) {
+    super();
+    this.opts = opts;
+  }
+  opts;
+  inputQueue = new UserMessageQueue();
+  q = null;
+  pending = /* @__PURE__ */ new Map();
+  currentSessionId = "";
+  started = false;
+  stopped = false;
+  /** Begin pumping. Resolves when the first SDK message arrives. */
+  async start() {
+    if (this.started) throw new Error("ClaudeDriver: already started");
+    this.started = true;
+    const canUseTool = (toolName, input, callbackOptions) => this.handlePermissionRequest(toolName, input, callbackOptions);
+    const options = {
+      cwd: this.opts.cwd,
+      permissionMode: this.opts.permissionMode,
+      model: this.opts.model,
+      agents: this.opts.agents,
+      agent: this.opts.agent,
+      tools: this.opts.tools,
+      allowedTools: this.opts.allowedTools,
+      disallowedTools: this.opts.disallowedTools,
+      additionalDirectories: this.opts.additionalDirectories,
+      resume: this.opts.resume,
+      forkSession: this.opts.forkSession,
+      env: this.opts.env ?? process.env,
+      extraArgs: this.opts.extraArgs,
+      pathToClaudeCodeExecutable: resolveClaudePath(),
+      canUseTool,
+      includePartialMessages: true
+    };
+    const promptIter = this.inputQueue.iter(() => this.currentSessionId);
+    this.q = query({ prompt: promptIter, options });
+    this.pump().catch((err) => {
+      logger_default.error(`ClaudeDriver pump error: ${err}`);
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
+    });
+  }
+  async pump() {
+    if (!this.q) return;
+    try {
+      for await (const msg of this.q) {
+        this.captureSessionId(msg);
+        const events = translate(msg);
+        for (const ev of events) this.emit("event", ev);
+      }
+    } catch (err) {
+      logger_default.error(`ClaudeDriver pump caught: ${err}`);
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      this.emit("end");
+    }
+  }
+  captureSessionId(msg) {
+    const sid = msg.session_id;
+    if (typeof sid === "string" && sid.length > 0) {
+      this.currentSessionId = sid;
+    }
+  }
+  /** SDK session id (assigned after init). Empty string before. */
+  get sdkSessionId() {
+    return this.currentSessionId;
+  }
+  // ── Control plane ──
+  sendUserMessage(content) {
+    if (this.stopped) {
+      logger_default.warn("ClaudeDriver.sendUserMessage after stop \u2014 dropped");
+      return;
+    }
+    this.inputQueue.push({ content });
+  }
+  async interrupt() {
+    if (!this.q) return;
+    await this.q.interrupt();
+  }
+  async setPermissionMode(mode) {
+    if (!this.q) return;
+    await this.q.setPermissionMode(mode);
+  }
+  async setModel(model) {
+    if (!this.q) return;
+    await this.q.setModel(model);
+  }
+  /** Stop the driver. Idempotent. Closes input; SDK pump drains. */
+  async stop() {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.inputQueue.close();
+    if (this.q) {
+      try {
+        await this.q.interrupt();
+      } catch (err) {
+        logger_default.warn(`ClaudeDriver.stop interrupt failed: ${err}`);
+      }
+    }
+  }
+  // ── Permission plane ──
+  handlePermissionRequest(toolName, input, cb) {
+    return new Promise((resolve3) => {
+      const requestId = randomUUID();
+      const pending = {
+        requestId,
+        toolUseId: cb.toolUseID,
+        toolName,
+        input,
+        resolve: resolve3
+      };
+      this.pending.set(requestId, pending);
+      this.emit(
+        "event",
+        buildPermissionRequest({
+          requestId,
+          toolUseId: cb.toolUseID,
+          toolName,
+          input,
+          title: cb.title,
+          description: cb.description,
+          suggestions: cb.suggestions,
+          agentId: cb.agentID
+        })
+      );
+      cb.signal.addEventListener("abort", () => {
+        if (this.pending.delete(requestId)) {
+          resolve3({ behavior: "deny", message: "aborted" });
+        }
+      });
+    });
+  }
+  /**
+   * App-side decision arrived. `decision` becomes `behavior`. `updatedInput`
+   * lets the app rewrite the tool call (used by AskUserQuestion to pass the
+   * user's answer back as the tool input).
+   */
+  resolvePermission(args) {
+    const pending = this.pending.get(args.requestId);
+    if (!pending) return false;
+    this.pending.delete(args.requestId);
+    if (args.decision === "allow") {
+      pending.resolve({
+        behavior: "allow",
+        updatedInput: args.updatedInput ?? pending.input
+      });
+    } else {
+      pending.resolve({
+        behavior: "deny",
+        message: args.message ?? "user rejected",
+        interrupt: false
+      });
+    }
+    return true;
+  }
+  /** Helper for plan/answer paths — same as resolvePermission with allow. */
+  resolveByToolUseId(args) {
+    for (const [requestId, pending] of this.pending.entries()) {
+      if (pending.toolUseId === args.toolUseId) {
+        return this.resolvePermission({
+          requestId,
+          decision: args.decision,
+          updatedInput: args.updatedInput,
+          message: args.message
+        });
+      }
+    }
+    return false;
+  }
+};
+
+// src/event-buffer.ts
+var COALESCE_KINDS = /* @__PURE__ */ new Set([
+  "assistant_text_delta",
+  "thinking_delta"
+]);
+var RingEventBuffer = class {
   ring;
-  maxLines;
-  /** Write position (next slot to write to). */
+  maxEvents;
+  /** Write position (next slot). */
   head = 0;
   /** Number of items currently stored. */
   count = 0;
-  totalReceived = 0;
-  /** Global monotonically increasing line index (never resets). */
+  /** Monotonic index of the next event to be assigned. */
   nextIndex = 0;
-  constructor(maxLines = 1e4) {
-    this.maxLines = maxLines;
-    this.ring = new Array(maxLines);
+  constructor(opts = {}) {
+    this.maxEvents = opts.maxEvents ?? 1e4;
+    this.ring = new Array(this.maxEvents);
   }
   /**
-   * Append a new line to the buffer (O(1)). Returns the stored BufferedLine.
+   * Append an event. Returns the stored event plus its assigned index.
+   * For coalescable kinds, attempts to merge into the most recent entry
+   * sharing the same `messageId`; on a successful merge no new index is
+   * minted and the returned `index` is the existing one.
    */
-  push(line) {
-    const stored = {
-      ...line,
-      index: this.nextIndex++,
-      content: stripAnsi(line.rawContent)
+  push(event) {
+    if (COALESCE_KINDS.has(event.kind)) {
+      const merged = this.tryMerge(event);
+      if (merged !== null) return merged;
+    }
+    const index = this.nextIndex++;
+    const entry = { index, event };
+    this.ring[this.head] = entry;
+    this.head = (this.head + 1) % this.maxEvents;
+    if (this.count < this.maxEvents) this.count++;
+    return { event, index };
+  }
+  /**
+   * Return the most recent entry's event in-place if it can absorb the new
+   * delta. Otherwise null (caller should append a fresh entry).
+   */
+  tryMerge(next) {
+    if (this.count === 0) return null;
+    const lastSlot = (this.head - 1 + this.maxEvents) % this.maxEvents;
+    const last = this.ring[lastSlot];
+    if (!last) return null;
+    if (last.event.kind !== next.kind) return null;
+    if (next.kind === "assistant_text_delta" && last.event.kind === "assistant_text_delta" && last.event.messageId === next.messageId) {
+      last.event = {
+        ...last.event,
+        text: last.event.text + next.text
+      };
+      return { event: last.event, index: last.index };
+    }
+    if (next.kind === "thinking_delta" && last.event.kind === "thinking_delta" && last.event.messageId === next.messageId) {
+      last.event = {
+        ...last.event,
+        text: last.event.text + next.text
+      };
+      return { event: last.event, index: last.index };
+    }
+    return null;
+  }
+  /**
+   * Return events with index ≥ `startIndex` in chronological order, plus
+   * the oldest index still resident (for scrollback-gap detection).
+   */
+  getFrom(startIndex) {
+    const ordered = this.materialize();
+    const firstAvailableIndex = ordered.length === 0 ? 0 : ordered[0].index;
+    let lo = 0;
+    let hi = ordered.length;
+    while (lo < hi) {
+      const mid = lo + hi >>> 1;
+      if (ordered[mid].index < startIndex) lo = mid + 1;
+      else hi = mid;
+    }
+    return {
+      events: ordered.slice(lo).map((e) => e.event),
+      firstAvailableIndex
     };
-    this.ring[this.head] = stored;
-    this.head = (this.head + 1) % this.maxLines;
-    this.totalReceived++;
-    if (this.count < this.maxLines) {
-      this.count++;
-    }
-    return stored;
   }
-  /**
-   * Return lines starting from `fromIndex` (global index), up to `count` lines.
-   * Uses binary search on the sorted index field for O(log n) lookup.
-   */
-  getLines(fromIndex, count) {
-    const ordered = this._getOrdered();
-    if (fromIndex !== void 0) {
-      let lo = 0;
-      let hi = ordered.length;
-      while (lo < hi) {
-        const mid = lo + hi >>> 1;
-        if (ordered[mid].index < fromIndex) lo = mid + 1;
-        else hi = mid;
-      }
-      const result = ordered.slice(lo);
-      return count !== void 0 ? result.slice(0, count) : result;
-    }
-    return count !== void 0 ? ordered.slice(0, count) : ordered;
+  getTail(count) {
+    const ordered = this.materialize();
+    if (count >= ordered.length) return ordered.map((e) => e.event);
+    return ordered.slice(ordered.length - count).map((e) => e.event);
   }
-  /**
-   * Return the most recent `count` lines.
-   */
-  getRecent(count) {
-    const ordered = this._getOrdered();
-    if (count >= ordered.length) {
-      return ordered;
-    }
-    return ordered.slice(ordered.length - count);
-  }
-  get totalLinesReceived() {
-    return this.totalReceived;
-  }
-  /**
-   * Index of the oldest line still present in the ring buffer, or 0 if empty.
-   * Used by clients to detect scrollback truncation on reconnect — if this
-   * exceeds the `fromLine` they requested, the gap was lost to ring wrap-around.
-   */
-  firstAvailableLine() {
-    if (this.count === 0) return 0;
-    const start = (this.head - this.count + this.maxLines) % this.maxLines;
-    return this.ring[start].index;
+  clear() {
+    this.ring = new Array(this.maxEvents);
+    this.head = 0;
+    this.count = 0;
   }
   get size() {
     return this.count;
   }
-  clear() {
-    this.ring = new Array(this.maxLines);
-    this.head = 0;
-    this.count = 0;
+  get totalCount() {
+    return this.nextIndex;
   }
-  /**
-   * Materialise the ring buffer contents in chronological order.
-   */
-  _getOrdered() {
+  get firstAvailableIndex() {
+    if (this.count === 0) return 0;
+    const start = (this.head - this.count + this.maxEvents) % this.maxEvents;
+    return this.ring[start].index;
+  }
+  materialize() {
     if (this.count === 0) return [];
-    const result = new Array(this.count);
-    const start = (this.head - this.count + this.maxLines) % this.maxLines;
+    const out = new Array(this.count);
+    const start = (this.head - this.count + this.maxEvents) % this.maxEvents;
     for (let i = 0; i < this.count; i++) {
-      result[i] = this.ring[(start + i) % this.maxLines];
+      out[i] = this.ring[(start + i) % this.maxEvents];
     }
-    return result;
+    return out;
   }
 };
 
 // src/session.ts
-init_logger();
-var Session = class _Session extends import_events.EventEmitter {
+var Session = class extends EventEmitter2 {
   id;
-  /** The original detected PID (or 0 for daemon-spawned sessions). */
-  pid;
-  /** Current runtime mode (null = pre-init / post-kill). */
-  mode = null;
+  /** Daemon doesn't own a child PID directly — the SDK manages that. */
+  pid = 0;
+  driver = null;
   buffer;
   _info;
-  /** Accumulates partial lines between data events. */
-  _partialLine = "";
-  /** Timer for detecting idle state (waiting for input). */
-  _idleTimer = null;
-  _exitWatcher = null;
-  _lastWriteRejectAt = 0;
-  static IDLE_TIMEOUT_MS = 3e3;
-  static WRITE_REJECT_WARN_INTERVAL_MS = 5e3;
-  constructor(pid, cwd, name, maxBufferLines = 1e4) {
+  constructor(name, cwd, maxBufferEvents = 1e4) {
     super();
-    this.id = (0, import_uuid.v4)();
-    this.pid = pid;
-    this.buffer = new LineBuffer(maxBufferLines);
+    this.id = uuidv4();
+    this.buffer = new RingEventBuffer({ maxEvents: maxBufferEvents });
     this._info = {
       id: this.id,
-      pid,
+      pid: 0,
       name,
       cwd,
       status: "idle",
       startedAt: Date.now(),
       lastActivityAt: Date.now(),
-      lineCount: 0,
       waitingForInput: false,
       connectedClients: [],
-      owned: false
+      owned: true,
+      costSoFar: 0,
+      lastEventIndex: -1
     };
   }
   // ────────────────────────────────────────────
-  // Public API
+  // Lifecycle
   // ────────────────────────────────────────────
-  /** True when the daemon (or wrapper CLI) accepts writes for this session. */
-  get owned() {
-    const k = this.mode?.kind;
-    return k === "spawn" || k === "wrap";
+  async spawn(opts) {
+    if (this.driver) {
+      logger_default.warn(`Session ${this.id}: spawn called twice \u2014 ignoring`);
+      return;
+    }
+    const extraArgs = {};
+    if (opts.worktree !== void 0 && opts.worktree !== false) {
+      extraArgs["worktree"] = typeof opts.worktree === "string" ? opts.worktree : null;
+    }
+    if (opts.outputStyle) extraArgs["output-style"] = opts.outputStyle;
+    if (opts.effortLevel) extraArgs["effort"] = opts.effortLevel;
+    const driverOpts = {
+      cwd: opts.cwd,
+      permissionMode: opts.permissionMode,
+      model: opts.model,
+      agent: opts.agent,
+      agents: opts.agents,
+      resume: opts.resumeSessionId,
+      env: this._sanitizedEnv(),
+      extraArgs: Object.keys(extraArgs).length > 0 ? extraArgs : void 0
+    };
+    if (opts.permissionMode) this._info.permissionMode = opts.permissionMode;
+    if (opts.model) this._info.model = opts.model;
+    if (opts.effortLevel) this._info.effortLevel = opts.effortLevel;
+    this.driver = new ClaudeDriver(driverOpts);
+    this.driver.on("event", (ev) => this._onEvent(ev));
+    this.driver.on("end", () => {
+      logger_default.info(`Session ${this.id}: driver stream ended`);
+      this._info.status = "ended";
+      this.emit("exit");
+    });
+    this.driver.on("error", (err) => {
+      logger_default.error(`Session ${this.id}: driver error: ${err.message}`);
+      const errorEvent = {
+        kind: "error",
+        code: "driver_error",
+        message: err.message,
+        fatal: false
+      };
+      this._onEvent(errorEvent);
+    });
+    await this.driver.start();
+    this._info.status = "active";
   }
+  /**
+   * Send the user's next turn. `content` is multipart text+image content
+   * matching MessageParam shape.
+   */
+  sendUserMessage(content) {
+    if (!this.driver) {
+      logger_default.warn(`Session ${this.id}: sendUserMessage with no driver`);
+      return;
+    }
+    this._info.lastActivityAt = Date.now();
+    this._info.waitingForInput = false;
+    this.driver.sendUserMessage(content);
+  }
+  async interrupt() {
+    if (!this.driver) return;
+    await this.driver.interrupt();
+  }
+  async setPermissionMode(mode) {
+    if (!this.driver) return;
+    await this.driver.setPermissionMode(mode);
+    this._info.permissionMode = mode;
+  }
+  async setModel(model) {
+    if (!this.driver) return;
+    await this.driver.setModel(model);
+    this._info.model = model;
+  }
+  resolvePermission(args) {
+    if (!this.driver) return false;
+    return this.driver.resolvePermission(args);
+  }
+  resolveByToolUseId(args) {
+    if (!this.driver) return false;
+    return this.driver.resolveByToolUseId(args);
+  }
+  async kill() {
+    if (!this.driver) return;
+    await this.driver.stop();
+    this._info.status = "ended";
+  }
+  // ────────────────────────────────────────────
+  // Metadata
+  // ────────────────────────────────────────────
   get info() {
-    return { ...this._info, lineCount: this.buffer.size };
+    return { ...this._info, lastEventIndex: this.buffer.totalCount - 1 };
   }
   updateStatus(status) {
     this._info.status = status;
@@ -879,308 +1024,46 @@ var Session = class _Session extends import_events.EventEmitter {
   setName(name) {
     this._info.name = name;
   }
-  /**
-   * Bind a wrapper-CLI socket to this session.  Output bytes will arrive via
-   * `pushExternalData()` and writes initiated by daemon clients will be sent
-   * back through the socket so the wrapper can feed them to the local PTY.
-   * Input is bidirectional, so the session is treated as `owned` for UI
-   * purposes — the read-only banner won't show.
-   */
-  attachWrapper(socket) {
-    this.mode = { kind: "wrap", socket };
-    this._info.owned = true;
-    this._info.status = "active";
-    socket.on("close", () => {
-      if (this.mode?.kind === "wrap" && this.mode.socket === socket) {
-        this.mode = null;
-        this._info.owned = false;
-        this._info.status = "ended";
-        this.emit("exit");
-      }
-    });
-  }
-  /**
-   * Re-bind this existing session to a (new) wrapper-CLI socket.  Used when
-   * a `walccy wrap` client reconnects after a daemon restart or transient
-   * disconnect: the scanner may have created an attach (RO) session for the
-   * still-running claude pid in the meantime, and we want to upgrade it back
-   * to a wrap session in place — preserving session id, buffer, and the
-   * client-side tab — rather than spawning a duplicate.
-   *
-   * Handles two prior states:
-   *   - `attach`: tear down the /proc stream and exit watcher, then attach
-   *     the new socket as wrap.
-   *   - `wrap`: destroy the previous (presumably stale) socket without
-   *     firing 'exit', then attach the new one.
-   */
-  promoteToWrap(socket) {
-    const oldMode = this.mode;
-    this.mode = null;
-    if (oldMode?.kind === "attach" && oldMode.stream) {
-      oldMode.stream.destroy();
-    } else if (oldMode?.kind === "wrap") {
-      try {
-        oldMode.socket.destroy();
-      } catch {
-      }
-    }
-    if (this._exitWatcher) {
-      clearInterval(this._exitWatcher);
-      this._exitWatcher = null;
-    }
-    this.attachWrapper(socket);
-  }
-  /** Feed raw output from a wrapper-CLI socket into this session's buffer. */
-  pushExternalData(data) {
-    this._handleRawData(data, "stdout");
-  }
-  /**
-   * Spawn a new `claude` process in `cwd` via node-pty.
-   * The daemon owns this PTY and can send input.
-   */
-  async spawn(cols = 220, rows = 50) {
-    if (this.mode) return;
-    const pty = require("node-pty");
-    const ptyProc = pty.spawn("claude", [], {
-      name: "xterm-256color",
-      cols,
-      rows,
-      cwd: this._info.cwd,
-      env: this._sanitizedEnv()
-    });
-    this.mode = { kind: "spawn", pty: ptyProc };
-    this._info.owned = true;
-    this._info.status = "active";
-    ptyProc.onData((data) => {
-      this._handleRawData(data, "stdout");
-    });
-    ptyProc.onExit(() => {
-      this._info.status = "ended";
-      if (this.mode?.kind === "spawn" && this.mode.pty === ptyProc) {
-        this.mode = null;
-      }
-      this._info.owned = false;
-      this.emit("exit");
-    });
-  }
-  /**
-   * Attach to an external process by reading its stdout fd via /proc.
-   * Creates a read-only (no-write) session.
-   *
-   * **Limitation:** Reading `/proc/{pid}/fd/1` only works reliably when the
-   * fd points to a regular file or a pipe whose other end is not being consumed
-   * concurrently. If fd/1 is a TTY, reads may return terminal input rather than
-   * output, or race with the terminal driver. For best results, prefer
-   * daemon-spawned sessions (where we own the PTY master).
-   */
-  async attach() {
-    if (this.mode) return;
-    const fdPath = `/proc/${this.pid}/fd/1`;
-    try {
-      fs3.accessSync(fdPath, fs3.constants.R_OK);
-      const realPath = fs3.readlinkSync(fdPath);
-      if (realPath.startsWith("/dev/pts/") || realPath.startsWith("/dev/tty")) {
-        logger_default.warn(
-          `Session ${this.id}: fd/1 points to ${realPath} (TTY) \u2014 skipping output monitor to avoid stealing terminal input`
-        );
-        this.mode = { kind: "attach", stream: null };
-        this._info.status = "active";
-        this._startExitWatcher();
-        return;
-      }
-    } catch {
-      logger_default.warn(
-        `Session ${this.id}: cannot read ${fdPath} \u2014 monitoring as external-only`
-      );
-      this.mode = { kind: "attach", stream: null };
-      this._info.status = "active";
-      this._startExitWatcher();
-      return;
-    }
-    try {
-      const stream = fs3.createReadStream(fdPath, {
-        encoding: "utf8",
-        autoClose: true
-      });
-      this.mode = { kind: "attach", stream };
-      this._info.status = "active";
-      stream.on("data", (chunk) => {
-        const data = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-        this._handleRawData(data, "stdout");
-      });
-      stream.on("error", (err) => {
-        logger_default.debug(`Session ${this.id} monitor stream error: ${err.message}`);
-        if (this.mode?.kind === "attach") {
-          this.mode = { kind: "attach", stream: null };
-        }
-      });
-      stream.on("close", () => {
-        logger_default.debug(`Session ${this.id} monitor stream closed`);
-        if (this.mode?.kind === "attach") {
-          this.mode = { kind: "attach", stream: null };
-        }
-      });
-    } catch (err) {
-      logger_default.debug(`Session ${this.id}: failed to open ${fdPath}: ${String(err)}`);
-      this.mode = { kind: "attach", stream: null };
-      this._info.status = "active";
-    }
-    this._startExitWatcher();
-  }
-  static MAX_INPUT_LENGTH = 64 * 1024;
-  // 64 KB
-  /**
-   * Send input to the owned PTY.
-   * No-ops for external (attach) sessions (read-only).
-   */
-  write(data, clientId) {
-    const mode = this.mode;
-    if (!mode || mode.kind === "attach") {
-      const now = Date.now();
-      const msg = `Session ${this.id}: write attempted on non-owned session (clientId=${clientId ?? "unknown"})`;
-      if (now - this._lastWriteRejectAt > _Session.WRITE_REJECT_WARN_INTERVAL_MS) {
-        logger_default.warn(msg);
-        this._lastWriteRejectAt = now;
-      } else {
-        logger_default.debug(msg);
-      }
-      return;
-    }
-    if (data.length > _Session.MAX_INPUT_LENGTH) {
-      logger_default.warn(
-        `Session ${this.id}: input too large (${data.length} bytes), truncating to ${_Session.MAX_INPUT_LENGTH}`
-      );
-      data = data.slice(0, _Session.MAX_INPUT_LENGTH);
-    }
-    this._info.lastActivityAt = Date.now();
-    switch (mode.kind) {
-      case "wrap":
-        mode.socket.write(
-          JSON.stringify({
-            type: "INPUT",
-            data: Buffer.from(data, "utf8").toString("base64")
-          }) + "\n"
-        );
-        return;
-      case "spawn":
-        mode.pty.write(data);
-        return;
-      default: {
-        const _exhaustive = mode;
-        void _exhaustive;
-        return;
-      }
-    }
-  }
-  resize(cols, rows) {
-    const mode = this.mode;
-    if (!mode) return;
-    switch (mode.kind) {
-      case "wrap":
-        mode.socket.write(
-          JSON.stringify({ type: "RESIZE", cols, rows }) + "\n"
-        );
-        return;
-      case "spawn":
-        mode.pty.resize(cols, rows);
-        return;
-      case "attach":
-        return;
-      default: {
-        const _exhaustive = mode;
-        void _exhaustive;
-        return;
-      }
-    }
-  }
-  kill() {
-    if (this._idleTimer) {
-      clearTimeout(this._idleTimer);
-      this._idleTimer = null;
-    }
-    if (this._exitWatcher) {
-      clearInterval(this._exitWatcher);
-      this._exitWatcher = null;
-    }
-    const mode = this.mode;
-    this.mode = null;
-    this._info.owned = false;
-    if (mode) {
-      switch (mode.kind) {
-        case "spawn":
-          try {
-            mode.pty.kill();
-          } catch {
-          }
-          break;
-        case "attach":
-          if (mode.stream) {
-            mode.stream.destroy();
-          }
-          break;
-        case "wrap":
-          try {
-            mode.socket.destroy();
-          } catch {
-          }
-          break;
-        default: {
-          const _exhaustive = mode;
-          void _exhaustive;
-        }
-      }
-    }
-    this._info.status = "ended";
+  get owned() {
+    return true;
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   on(event, listener) {
     return super.on(event, listener);
   }
-  // ────────────────────────────────────────────
-  // Private helpers
-  // ────────────────────────────────────────────
-  _handleRawData(data, source) {
-    const combined = this._partialLine + data;
-    const segments = combined.split(/\r?\n/);
-    const bufferedLines = [];
-    this._partialLine = segments.pop() ?? "";
-    for (const seg of segments) {
-      if (seg === void 0) continue;
-      const line = this.buffer.push({
-        rawContent: seg,
-        content: seg,
-        timestamp: Date.now(),
-        source
-      });
-      bufferedLines.push(line);
-    }
-    if (bufferedLines.length > 0) {
-      this._info.lastActivityAt = Date.now();
-      this._info.status = "active";
-      if (this._info.waitingForInput) {
-        this._info.waitingForInput = false;
-      }
-      this.emit("data", bufferedLines);
-      this._resetIdleTimer();
-    }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emit(event, ...args) {
+    return super.emit(event, ...args);
   }
-  _resetIdleTimer() {
-    if (this._idleTimer) {
-      clearTimeout(this._idleTimer);
-    }
-    this._idleTimer = setTimeout(() => {
-      this._idleTimer = null;
-      if (this._info.status === "active" && !this._info.waitingForInput) {
+  // ────────────────────────────────────────────
+  // Internal
+  // ────────────────────────────────────────────
+  _onEvent(ev) {
+    const { event, index } = this.buffer.push(ev);
+    this._info.lastActivityAt = Date.now();
+    switch (event.kind) {
+      case "init":
+        if (event.model) this._info.model = event.model;
+        if (event.permissionMode) this._info.permissionMode = event.permissionMode;
+        break;
+      case "status":
+        this._info.status = event.status === "requesting" || event.status === "compacting" ? "active" : "idle";
+        if (event.permissionMode) this._info.permissionMode = event.permissionMode;
+        break;
+      case "permission_request":
         this._info.waitingForInput = true;
-        this.emit("data", []);
-      }
-    }, _Session.IDLE_TIMEOUT_MS);
-    this._idleTimer.unref();
+        break;
+      case "turn_complete":
+        this._info.status = "idle";
+        this._info.costSoFar = (this._info.costSoFar ?? 0) + event.cost.total;
+        break;
+      default:
+        break;
+    }
+    this._info.lastEventIndex = index;
+    this.emit("session-event", event, index);
   }
-  /**
-   * Build a sanitized environment for spawned processes.
-   * Only passes through safe, well-known variables.
-   */
+  /** Allowlisted env passthrough for the SDK child process. */
   _sanitizedEnv() {
     const allowlist = [
       "HOME",
@@ -1206,37 +1089,19 @@ var Session = class _Session extends import_events.EventEmitter {
     ];
     const env = {};
     for (const key of allowlist) {
-      if (process.env[key] !== void 0) {
-        env[key] = process.env[key];
-      }
+      const v = process.env[key];
+      if (v !== void 0) env[key] = v;
     }
     return env;
-  }
-  /**
-   * Poll /proc/{pid} to detect when the external process exits.
-   */
-  _startExitWatcher() {
-    const procDir = `/proc/${this.pid}`;
-    const timer = setInterval(() => {
-      if (!fs3.existsSync(procDir)) {
-        clearInterval(timer);
-        this._exitWatcher = null;
-        this._info.status = "ended";
-        this.emit("exit");
-      }
-    }, 2e3);
-    this._exitWatcher = timer;
-    timer.unref();
   }
 };
 
 // src/transcript-watcher.ts
-var import_events2 = require("events");
-var fs4 = __toESM(require("fs"));
-var os3 = __toESM(require("os"));
-var path3 = __toESM(require("path"));
-init_logger();
-var TranscriptWatcher = class extends import_events2.EventEmitter {
+import { EventEmitter as EventEmitter3 } from "events";
+import * as fs4 from "fs";
+import * as os3 from "os";
+import * as path3 from "path";
+var TranscriptWatcher = class extends EventEmitter3 {
   states = /* @__PURE__ */ new Map();
   filesInUse = /* @__PURE__ */ new Set();
   timer = null;
@@ -1356,17 +1221,14 @@ function encodeCwd(cwd) {
 }
 
 // src/session-manager.ts
-init_logger();
-var SessionManager = class extends import_events3.EventEmitter {
+var SessionManager = class extends EventEmitter4 {
   sessions = /* @__PURE__ */ new Map();
-  /** Maps detected PID → session ID to avoid duplicate sessions. */
-  pidToSessionId = /* @__PURE__ */ new Map();
-  maxBufferLines;
+  maxBufferEvents;
   pruneTimer = null;
   transcripts;
-  constructor(maxBufferLines = 1e4, transcripts) {
+  constructor(maxBufferEvents = 1e4, transcripts) {
     super();
-    this.maxBufferLines = maxBufferLines;
+    this.maxBufferEvents = maxBufferEvents;
     this.transcripts = transcripts ?? new TranscriptWatcher();
     this.transcripts.on("summary", (sessionId, summary) => {
       const session = this.sessions.get(sessionId);
@@ -1381,57 +1243,38 @@ var SessionManager = class extends import_events3.EventEmitter {
   // Explicit kill (client-initiated)
   // ────────────────────────────────────────────
   /**
-   * Terminate a session by id.  Best-effort `SIGTERM` against the recorded
-   * pid (covers attach / wrap modes where the underlying process is not
-   * directly owned by the daemon — spawn mode would still get killed via
-   * pty.kill inside session.kill, but SIGTERM first is harmless and unifies
-   * the code path).  Then the session is removed (which emits 'session-removed'
-   * so ws-server broadcasts SESSION_REMOVED to clients).
-   *
-   * Returns true if a session with that id existed, false otherwise.
+   * Terminate a session by id. Stops the SDK driver via Query.interrupt()
+   * and removes the session. Returns true if a session existed, false
+   * otherwise.
    */
-  killSession(id) {
+  async killSession(id) {
     const session = this.sessions.get(id);
     if (!session) return false;
-    const pid = session.pid;
-    if (pid > 0) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch (err) {
-        const code = err.code;
-        if (code !== "ESRCH") {
-          logger_default.warn(
-            `killSession(${id}): process.kill(${pid}) failed: ${String(err)}`
-          );
-        }
-      }
+    try {
+      await session.kill();
+    } catch (err) {
+      logger_default.warn(`killSession(${id}): kill failed: ${String(err)}`);
     }
     this.removeSession(id);
     return true;
   }
   // ────────────────────────────────────────────
-  // Idle-attach pruning
+  // Idle prune
   // ────────────────────────────────────────────
   /**
-   * Periodically drop attach-mode (non-owned) sessions that have had no
-   * activity for `idleMs` and currently have no subscribed clients.  This
-   * cleans up long-running orphans (e.g. a months-old detached tmux running
-   * `claude`) so they don't permanently litter the tab bar.
-   *
-   * The underlying process is NOT killed — pruning only stops tracking.
-   * The ProcessScanner won't re-emit `process-found` for a still-alive pid
-   * already in its `knownPids`, so the pruned session stays gone until the
-   * pid dies and a new claude process recycles the id, or the daemon
-   * restarts.
+   * Periodically drop sessions that have had no activity for `idleMs` AND
+   * have no subscribed clients. Idle prune is now opt-in legacy plumbing —
+   * with no attach mode and explicit kill via the UI, most sessions go
+   * away cleanly. Retained for safety against runaway forgotten tabs.
    */
   startIdlePrune(idleMs, checkIntervalMs = 15 * 60 * 1e3) {
     if (this.pruneTimer || idleMs <= 0) return;
     this.pruneTimer = setInterval(() => {
-      this._pruneOnce(idleMs);
+      void this._pruneOnce(idleMs);
     }, checkIntervalMs);
     this.pruneTimer.unref();
     logger_default.info(
-      `SessionManager: idle-attach prune enabled (idleMs=${idleMs}, checkMs=${checkIntervalMs})`
+      `SessionManager: idle prune enabled (idleMs=${idleMs}, checkMs=${checkIntervalMs})`
     );
   }
   stopIdlePrune() {
@@ -1444,18 +1287,17 @@ var SessionManager = class extends import_events3.EventEmitter {
     this.transcripts.stopAll();
   }
   /** Exposed for tests — runs one prune pass without scheduling. */
-  _pruneOnce(idleMs) {
+  async _pruneOnce(idleMs) {
     const cutoff = Date.now() - idleMs;
     let removed = 0;
     for (const session of Array.from(this.sessions.values())) {
       const info = session.info;
-      if (info.owned) continue;
       if (info.connectedClients.length > 0) continue;
       if (info.lastActivityAt > cutoff) continue;
       logger_default.info(
-        `Pruning idle attach session ${session.id} (pid=${session.pid}, idle for ${Date.now() - info.lastActivityAt}ms)`
+        `Pruning idle session ${session.id} (idle for ${Date.now() - info.lastActivityAt}ms)`
       );
-      this.removeSession(session.id);
+      await this.killSession(session.id);
       removed++;
     }
     return removed;
@@ -1464,94 +1306,31 @@ var SessionManager = class extends import_events3.EventEmitter {
   // Session lifecycle
   // ────────────────────────────────────────────
   /**
-   * Create a session for a detected external PID.
-   * Returns the existing session if one already exists for this PID.
+   * Spawn a new Claude session via the Agent SDK in `cwd`.
    */
-  createSession(pid, cwd) {
-    const existingId = this.pidToSessionId.get(pid);
-    if (existingId) {
-      const existing = this.sessions.get(existingId);
-      if (existing) return existing;
+  async spawnSession(opts) {
+    const name = opts.name ?? this.deriveName(opts.cwd);
+    const session = new Session(name, opts.cwd, this.maxBufferEvents);
+    this.sessions.set(session.id, session);
+    this.wireSessionEvents(session);
+    session.on("exit", () => {
+      logger_default.info(`Session ${session.id} exited`);
+      this.removeSession(session.id);
+    });
+    try {
+      await session.spawn(opts);
+    } catch (err) {
+      this.sessions.delete(session.id);
+      this.transcripts.unwatch(session.id);
+      throw err;
     }
-    const name = this.deriveName(cwd);
-    const session = new Session(pid, cwd, name, this.maxBufferLines);
-    this.sessions.set(session.id, session);
-    this.pidToSessionId.set(pid, session.id);
-    this.wireSessionEvents(session);
-    session.on("exit", () => {
-      logger_default.info(`Session ${session.id} (pid=${pid}) exited`);
-      this.removeSession(session.id);
-    });
-    logger_default.info(
-      `Session created: id=${session.id} pid=${pid} cwd=${cwd} name=${name}`
-    );
-    this.transcripts.watch(session.id, cwd, session.info.startedAt);
-    this.emit("session-added", session.info);
-    return session;
-  }
-  /**
-   * Spawn a new `claude` process owned by the daemon via node-pty.
-   */
-  async spawnSession(cwd) {
-    const name = this.deriveName(cwd);
-    const session = new Session(0, cwd, name, this.maxBufferLines);
-    this.sessions.set(session.id, session);
-    this.wireSessionEvents(session);
-    session.on("exit", () => {
-      logger_default.info(`Spawned session ${session.id} exited`);
-      this.removeSession(session.id);
-    });
-    await session.spawn();
-    logger_default.info(`Spawned session: id=${session.id} cwd=${cwd} name=${name}`);
-    this.transcripts.watch(session.id, cwd, session.info.startedAt);
-    this.emit("session-added", session.info);
-    return session;
-  }
-  /**
-   * Create a session backed by a `walccy wrap` CLI socket.  The wrapper owns
-   * the actual PTY and forwards I/O over `socket`.
-   */
-  createWrappedSession(pid, cwd, name, socket) {
-    if (pid > 0) {
-      const existingId = this.pidToSessionId.get(pid);
-      if (existingId) {
-        const existing = this.sessions.get(existingId);
-        if (existing) {
-          existing.promoteToWrap(socket);
-          logger_default.info(
-            `Wrapped session promoted: id=${existing.id} pid=${pid} cwd=${cwd}`
-          );
-          this.emit("session-updated", existing.id, {
-            owned: true,
-            status: "active"
-          });
-          return existing;
-        }
-      }
-    }
-    const finalName = name ?? this.deriveName(cwd);
-    const session = new Session(pid, cwd, finalName, this.maxBufferLines);
-    session.attachWrapper(socket);
-    this.sessions.set(session.id, session);
-    if (pid > 0) this.pidToSessionId.set(pid, session.id);
-    this.wireSessionEvents(session);
-    session.on("exit", () => {
-      logger_default.info(`Wrapped session ${session.id} (pid=${pid}) exited`);
-      this.removeSession(session.id);
-    });
-    logger_default.info(
-      `Wrapped session created: id=${session.id} pid=${pid} cwd=${cwd} name=${finalName}`
-    );
-    this.transcripts.watch(session.id, cwd, session.info.startedAt);
+    logger_default.info(`Spawned session: id=${session.id} cwd=${opts.cwd} name=${name}`);
+    this.transcripts.watch(session.id, opts.cwd, session.info.startedAt);
     this.emit("session-added", session.info);
     return session;
   }
   getSession(id) {
     return this.sessions.get(id);
-  }
-  getSessionByPid(pid) {
-    const id = this.pidToSessionId.get(pid);
-    return id ? this.sessions.get(id) : void 0;
   }
   getAllSessions() {
     return Array.from(this.sessions.values());
@@ -1559,16 +1338,13 @@ var SessionManager = class extends import_events3.EventEmitter {
   removeSession(id) {
     const session = this.sessions.get(id);
     if (!session) return;
-    this.pidToSessionId.delete(session.pid);
     this.transcripts.unwatch(id);
-    session.kill();
+    void session.kill();
     this.sessions.delete(id);
     logger_default.info(`Session removed: id=${id}`);
     this.emit("session-removed", id);
   }
-  /**
-   * Add or remove a client ID from a session's connectedClients list.
-   */
+  /** Add / remove a client ID from a session's connectedClients list. */
   addClientToSession(sessionId, clientId) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -1600,16 +1376,23 @@ var SessionManager = class extends import_events3.EventEmitter {
       if (!used.has(candidate)) return candidate;
     }
   }
-  /** Forward session 'data' events as session-updated metadata broadcasts. */
+  /** Forward typed SessionEvents up as a manager-level event for fan-out. */
   wireSessionEvents(session) {
-    session.on("data", () => {
+    session.on("session-event", (event, index) => {
+      this.emit("session-event", session.id, event, index);
       const info = session.info;
-      this.emit("session-updated", session.id, {
+      const changes = {
         lastActivityAt: info.lastActivityAt,
-        lineCount: info.lineCount,
         status: info.status,
-        waitingForInput: info.waitingForInput
-      });
+        waitingForInput: info.waitingForInput,
+        costSoFar: info.costSoFar,
+        lastEventIndex: info.lastEventIndex
+      };
+      if (event.kind === "init") {
+        changes.model = info.model;
+        changes.permissionMode = info.permissionMode;
+      }
+      this.emit("session-updated", session.id, changes);
     });
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1617,134 +1400,11 @@ var SessionManager = class extends import_events3.EventEmitter {
     return super.on(event, listener);
   }
 };
-
-// src/process-scanner.ts
-var import_events4 = require("events");
-var fsp = __toESM(require("fs/promises"));
-var path5 = __toESM(require("path"));
-init_logger();
-var ProcessScanner = class extends import_events4.EventEmitter {
-  interval = null;
-  knownPids = /* @__PURE__ */ new Set();
-  // ────────────────────────────────────────────
-  // Public API
-  // ────────────────────────────────────────────
-  start(intervalMs = 3e3) {
-    if (this.interval) return;
-    this.scan().catch((err) => {
-      logger_default.error(`ProcessScanner initial scan error: ${String(err)}`);
-    });
-    this.interval = setInterval(() => {
-      this.scan().catch((err) => {
-        logger_default.error(`ProcessScanner scan error: ${String(err)}`);
-      });
-    }, intervalMs);
-    this.interval.unref();
-    logger_default.info(`ProcessScanner started (interval=${intervalMs}ms)`);
-  }
-  stop() {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-    }
-    logger_default.info("ProcessScanner stopped");
-  }
-  // ────────────────────────────────────────────
-  // Scanning logic
-  // ────────────────────────────────────────────
-  async scan() {
-    const currentPids = /* @__PURE__ */ new Set();
-    let entries;
-    try {
-      entries = await fsp.readdir("/proc");
-    } catch (err) {
-      logger_default.error(`Cannot read /proc: ${String(err)}`);
-      return;
-    }
-    for (const entry of entries) {
-      const pid = parseInt(entry, 10);
-      if (isNaN(pid) || pid <= 0) continue;
-      const isClaudeProcess = await this.isClaude(pid);
-      if (!isClaudeProcess) continue;
-      currentPids.add(pid);
-      if (!this.knownPids.has(pid)) {
-        const cwd = await this.readCwd(pid);
-        if (cwd !== null) {
-          logger_default.debug(`ProcessScanner: found claude pid=${pid} cwd=${cwd}`);
-          this.knownPids.add(pid);
-          this.emit("process-found", pid, cwd);
-        }
-      }
-    }
-    for (const pid of this.knownPids) {
-      if (!currentPids.has(pid)) {
-        logger_default.debug(`ProcessScanner: lost claude pid=${pid}`);
-        this.knownPids.delete(pid);
-        this.emit("process-lost", pid);
-      }
-    }
-  }
-  // ────────────────────────────────────────────
-  // Private helpers
-  // ────────────────────────────────────────────
-  /**
-   * Returns true if the process with `pid` is a `claude` process.
-   * Reads /proc/{pid}/cmdline (null-byte separated argv).
-   *
-   * Only argv[0] (and argv[1] when argv[0] is a JS runtime) are inspected —
-   * scanning every argv element causes false positives like `walccy claude`
-   * (the wrap-cli wrapper), whose subcommand `claude` would otherwise match
-   * and produce a duplicate RO tab alongside the wrapped session.
-   */
-  async isClaude(pid) {
-    const cmdlinePath = path5.join("/proc", String(pid), "cmdline");
-    try {
-      const raw = await fsp.readFile(cmdlinePath, "utf8");
-      const args = raw.split("\0").filter(Boolean);
-      return isClaudeProcessArgv(args);
-    } catch {
-      return false;
-    }
-  }
-  /**
-   * Read the CWD of a process via /proc/{pid}/cwd symlink.
-   * Returns null if not readable.
-   */
-  async readCwd(pid) {
-    const cwdLink = path5.join("/proc", String(pid), "cwd");
-    try {
-      return await fsp.readlink(cwdLink);
-    } catch {
-      return null;
-    }
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  on(event, listener) {
-    return super.on(event, listener);
-  }
-};
-function isClaudeProcessArgv(args) {
-  if (args.length === 0) return false;
-  if (isClaudeArg(args[0])) return true;
-  if (isJsRuntime(args[0]) && args.length >= 2 && isClaudeArg(args[1])) {
-    return true;
-  }
-  return false;
-}
-function isClaudeArg(arg) {
-  const base = arg.split(/[/\\]/).pop() ?? arg;
-  return base === "claude" || /^claude\.[jt]s$/.test(base);
-}
-function isJsRuntime(arg) {
-  const base = arg.split(/[/\\]/).pop() ?? arg;
-  return base === "node" || base === "bun" || base === "deno" || base === "npx";
-}
 
 // src/directory-scanner.ts
-var fs5 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
-var os4 = __toESM(require("os"));
-init_logger();
+import * as fs5 from "fs";
+import * as path5 from "path";
+import * as os4 from "os";
 var COMMON_DEV_ROOTS = [
   "Documents",
   "Documents/dev",
@@ -1785,14 +1445,14 @@ var DirectoryScanner = class {
       if (!this.isReadableDir(cwd)) continue;
       out.push({
         path: cwd,
-        label: path6.basename(cwd) || cwd,
+        label: path5.basename(cwd) || cwd,
         kind: "recent",
         detail: this.friendlyParent(cwd)
       });
       seen.add(cwd);
     }
     for (const rel of COMMON_DEV_ROOTS) {
-      const root = path6.resolve(this.homeDir, rel);
+      const root = path5.resolve(this.homeDir, rel);
       if (!this.isReadableDir(root)) continue;
       this.findGitRepos(root, 0, seen, out);
       if (out.length >= MAX_RESULTS) break;
@@ -1818,9 +1478,9 @@ var DirectoryScanner = class {
     if (expanded === "~") {
       expanded = this.homeDir;
     } else if (expanded.startsWith("~/")) {
-      expanded = path6.join(this.homeDir, expanded.slice(2));
+      expanded = path5.join(this.homeDir, expanded.slice(2));
     }
-    const resolved = path6.resolve(expanded);
+    const resolved = path5.resolve(expanded);
     let real;
     try {
       real = fs5.realpathSync.native(resolved);
@@ -1833,7 +1493,7 @@ var DirectoryScanner = class {
   }
   /** True iff `p` is the user's home directory or a descendant. */
   isUnderHome(p) {
-    return p === this.homeDir || p.startsWith(this.homeDir + path6.sep);
+    return p === this.homeDir || p.startsWith(this.homeDir + path5.sep);
   }
   // ────────────────────────────────────────────
   // Internals
@@ -1853,7 +1513,7 @@ var DirectoryScanner = class {
       if (visitedCount >= MAX_DIRS_PER_ROOT) break;
       if (entry.name.startsWith(".")) continue;
       if (entry.name === "node_modules") continue;
-      const full = path6.join(root, entry.name);
+      const full = path5.join(root, entry.name);
       let st;
       try {
         st = fs5.lstatSync(full);
@@ -1865,7 +1525,7 @@ var DirectoryScanner = class {
       const inode = `${st.dev}:${st.ino}`;
       if (visited.has(inode)) continue;
       visited.add(inode);
-      const gitDir = path6.join(full, ".git");
+      const gitDir = path5.join(full, ".git");
       let isRepo = false;
       try {
         if (fs5.existsSync(gitDir)) isRepo = true;
@@ -1898,9 +1558,9 @@ var DirectoryScanner = class {
   }
   /** Return parent path with $HOME collapsed to "~". */
   friendlyParent(p) {
-    const parent = path6.dirname(p);
+    const parent = path5.dirname(p);
     if (parent === this.homeDir) return "~";
-    if (parent.startsWith(this.homeDir + path6.sep)) {
+    if (parent.startsWith(this.homeDir + path5.sep)) {
       return "~" + parent.slice(this.homeDir.length);
     }
     return parent;
@@ -1922,9 +1582,7 @@ function recentCwdsFromSessions(sessions) {
 }
 
 // src/client-registry.ts
-var import_ws = require("ws");
-init_logger();
-var INPUT_LOCK_TTL_MS = 2e3;
+import { WebSocket } from "ws";
 var ClientRegistry = class {
   constructor(sessionManager, pushService) {
     this.sessionManager = sessionManager;
@@ -2025,7 +1683,7 @@ var ClientRegistry = class {
   }
   // ────────── send / broadcast ──────────
   send(ws, msg) {
-    if (ws.readyState !== import_ws.WebSocket.OPEN) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
     try {
       ws.send(JSON.stringify(msg));
     } catch (err) {
@@ -2039,7 +1697,7 @@ var ClientRegistry = class {
   broadcastAll(msg) {
     const payload = JSON.stringify(msg);
     for (const client of this.clients.values()) {
-      if (client.isAuthenticated && client.ws.readyState === import_ws.WebSocket.OPEN) {
+      if (client.isAuthenticated && client.ws.readyState === WebSocket.OPEN) {
         try {
           client.ws.send(payload);
         } catch (err) {
@@ -2054,7 +1712,7 @@ var ClientRegistry = class {
     const payload = JSON.stringify(msg);
     for (const clientId of subs) {
       const client = this.clients.get(clientId);
-      if (!client || !client.isAuthenticated || client.ws.readyState !== import_ws.WebSocket.OPEN) {
+      if (!client || !client.isAuthenticated || client.ws.readyState !== WebSocket.OPEN) {
         continue;
       }
       try {
@@ -2067,8 +1725,7 @@ var ClientRegistry = class {
 };
 
 // src/auth-handler.ts
-var crypto2 = __toESM(require("crypto"));
-init_logger();
+import * as crypto2 from "crypto";
 var DAEMON_VERSION = package_default.version;
 function handleAuth(client, msg, deps) {
   const { config, registry } = deps;
@@ -2102,7 +1759,6 @@ function handleAuth(client, msg, deps) {
 }
 
 // src/spawn-handler.ts
-init_logger();
 async function handleSpawnSession(client, msg, deps) {
   const { sessionManager, directoryScanner, registry, config } = deps;
   const cwd = directoryScanner.resolveAndValidate(msg.cwd);
@@ -2132,7 +1788,17 @@ async function handleSpawnSession(client, msg, deps) {
     }
   }
   try {
-    const session = await sessionManager.spawnSession(cwd);
+    const session = await sessionManager.spawnSession({
+      cwd,
+      name: msg.name,
+      permissionMode: msg.permissionMode,
+      model: msg.model,
+      effortLevel: msg.effortLevel,
+      outputStyle: msg.outputStyle,
+      worktree: msg.worktree,
+      resumeSessionId: msg.resumeSessionId,
+      agent: msg.agent
+    });
     const reply = {
       type: "SPAWN_RESULT",
       requestId: msg.requestId,
@@ -2155,8 +1821,6 @@ async function handleSpawnSession(client, msg, deps) {
 }
 
 // src/message-router.ts
-init_logger();
-var MAX_INPUT_LENGTH = 64 * 1024;
 var MessageRouter = class _MessageRouter {
   constructor(deps) {
     this.deps = deps;
@@ -2166,22 +1830,31 @@ var MessageRouter = class _MessageRouter {
   clientListDirsAt = /* @__PURE__ */ new Map();
   static LIST_DIRS_MIN_INTERVAL_MS = 1e3;
   static LIST_DIRS_CACHE_TTL_MS = 2e3;
-  /**
-   * Entry point invoked by ws-transport for every parsed JSON message.
-   */
   dispatch(client, msg) {
     if (typeof msg !== "object" || msg === null || !("type" in msg)) {
-      this.deps.registry.sendError(client.ws, "INVALID_MESSAGE", "Missing type field");
+      this.deps.registry.sendError(
+        client.ws,
+        "INVALID_MESSAGE",
+        "Missing type field"
+      );
       return;
     }
     const typed = msg;
     if (!this._validateMessage(typed)) {
-      this.deps.registry.sendError(client.ws, "INVALID_MESSAGE", "Invalid message fields");
+      this.deps.registry.sendError(
+        client.ws,
+        "INVALID_MESSAGE",
+        "Invalid message fields"
+      );
       return;
     }
     if (!client.isAuthenticated) {
       if (typed.type !== "AUTH") {
-        this.deps.registry.sendError(client.ws, "NOT_AUTHENTICATED", "Send AUTH first");
+        this.deps.registry.sendError(
+          client.ws,
+          "NOT_AUTHENTICATED",
+          "Send AUTH first"
+        );
         client.ws.close(1008, "Not authenticated");
         return;
       }
@@ -2204,12 +1877,6 @@ var MessageRouter = class _MessageRouter {
       case "UNSUBSCRIBE":
         this._handleUnsubscribe(client, typed);
         break;
-      case "INPUT":
-        this._handleInput(client, typed);
-        break;
-      case "RESIZE":
-        this._handleResize(client, typed);
-        break;
       case "PING":
         this._handlePing(client);
         break;
@@ -2227,11 +1894,18 @@ var MessageRouter = class _MessageRouter {
           config: this.deps.config
         });
         break;
-      case "KILL_SESSION":
-        this._handleKillSession(client, typed);
+      case "CONTROL_MESSAGE":
+        void this._handleControlMessage(client, typed);
         break;
-      default:
-        this.deps.registry.sendError(client.ws, "UNKNOWN_TYPE", "Unknown message type");
+      default: {
+        const _exhaustive = typed;
+        void _exhaustive;
+        this.deps.registry.sendError(
+          client.ws,
+          "UNKNOWN_TYPE",
+          "Unknown message type"
+        );
+      }
     }
   }
   // ────────────────────────────────────────────
@@ -2245,21 +1919,17 @@ var MessageRouter = class _MessageRouter {
       case "PING":
         return true;
       case "SUBSCRIBE":
-        return typeof msg.sessionId === "string" && (msg.fromLine === void 0 || typeof msg.fromLine === "number" && Number.isInteger(msg.fromLine) && msg.fromLine >= 0);
+        return typeof msg.sessionId === "string" && (msg.fromEventIndex === void 0 || typeof msg.fromEventIndex === "number" && Number.isInteger(msg.fromEventIndex) && msg.fromEventIndex >= 0);
       case "UNSUBSCRIBE":
         return typeof msg.sessionId === "string";
-      case "INPUT":
-        return typeof msg.sessionId === "string" && typeof msg.data === "string" && msg.data.length <= MAX_INPUT_LENGTH;
-      case "RESIZE":
-        return typeof msg.sessionId === "string" && typeof msg.cols === "number" && Number.isInteger(msg.cols) && msg.cols > 0 && msg.cols <= 1e3 && typeof msg.rows === "number" && Number.isInteger(msg.rows) && msg.rows > 0 && msg.rows <= 500;
       case "REGISTER_PUSH_TOKEN":
         return typeof msg.token === "string" && msg.token.length > 0 && (msg.platform === "android" || msg.platform === "ios");
       case "LIST_DIRECTORIES":
         return msg.query === void 0 || typeof msg.query === "string" && msg.query.length <= 256;
       case "SPAWN_SESSION":
         return typeof msg.cwd === "string" && msg.cwd.length > 0 && msg.cwd.length <= 4096 && typeof msg.requestId === "string" && msg.requestId.length > 0;
-      case "KILL_SESSION":
-        return typeof msg.sessionId === "string" && msg.sessionId.length > 0;
+      case "CONTROL_MESSAGE":
+        return typeof msg.sessionId === "string" && msg.sessionId.length > 0 && typeof msg.message === "object" && msg.message !== null;
       default: {
         const _exhaustive = msg;
         void _exhaustive;
@@ -2276,81 +1946,9 @@ var MessageRouter = class _MessageRouter {
     this.deps.registry.send(client.ws, msg);
   }
   _handleSubscribe(client, msg) {
-    const { sessionManager, registry, config } = this.deps;
-    const session = sessionManager.getSession(msg.sessionId);
-    if (!session) {
-      registry.sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
-      return;
-    }
-    registry.addSubscription(client.id, msg.sessionId);
-    sessionManager.addClientToSession(msg.sessionId, client.id);
-    if (msg.fromLine !== void 0) {
-      const lines = session.buffer.getLines(msg.fromLine);
-      const reply = {
-        type: "RESUME",
-        sessionId: msg.sessionId,
-        lines,
-        totalLines: session.buffer.totalLinesReceived
-      };
-      registry.send(client.ws, reply);
-      logger_default.debug(
-        `Client ${client.id} resumed session ${msg.sessionId} from line ${msg.fromLine}, sent ${lines.length} lines`
-      );
-    } else {
-      const historyCount = config.historyOnConnect;
-      const lines = session.buffer.getRecent(historyCount);
-      const history = {
-        type: "HISTORY",
-        sessionId: msg.sessionId,
-        lines,
-        totalLines: session.buffer.totalLinesReceived,
-        firstAvailableLine: session.buffer.firstAvailableLine()
-      };
-      registry.send(client.ws, history);
-      logger_default.debug(
-        `Client ${client.id} subscribed to session ${msg.sessionId}, sent ${lines.length} history lines`
-      );
-    }
-  }
-  _handleUnsubscribe(client, msg) {
-    this.deps.registry.removeSubscription(client.id, msg.sessionId);
-    this.deps.sessionManager.removeClientFromSession(msg.sessionId, client.id);
-    logger_default.debug(`Client ${client.id} unsubscribed from session ${msg.sessionId}`);
-  }
-  _handleInput(client, msg) {
     const { sessionManager, registry } = this.deps;
     const session = sessionManager.getSession(msg.sessionId);
     if (!session) {
-      registry.sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
-      return;
-    }
-    const lock = registry.getInputLock(msg.sessionId);
-    if (lock && lock.expiresAt > Date.now() && lock.clientId !== client.id) {
-      const lockMsg = {
-        type: "INPUT_LOCK",
-        sessionId: msg.sessionId,
-        lockedByClientId: lock.clientId,
-        lockedByClientName: lock.clientName,
-        expiresAt: lock.expiresAt
-      };
-      registry.send(client.ws, lockMsg);
-      return;
-    }
-    if (!session.owned) {
-      session.write(msg.data, client.id);
-      return;
-    }
-    registry.setInputLock(msg.sessionId, {
-      clientId: client.id,
-      clientName: client.name,
-      expiresAt: Date.now() + INPUT_LOCK_TTL_MS
-    });
-    session.write(msg.data, client.id);
-  }
-  _handleKillSession(client, msg) {
-    const { sessionManager, registry } = this.deps;
-    const ok = sessionManager.killSession(msg.sessionId);
-    if (!ok) {
       registry.sendError(
         client.ws,
         "SESSION_NOT_FOUND",
@@ -2358,16 +1956,110 @@ var MessageRouter = class _MessageRouter {
       );
       return;
     }
-    logger_default.info(`Client ${client.id} killed session ${msg.sessionId}`);
+    registry.addSubscription(client.id, msg.sessionId);
+    sessionManager.addClientToSession(msg.sessionId, client.id);
+    const fromIndex = msg.fromEventIndex ?? 0;
+    const { events, firstAvailableIndex } = session.buffer.getFrom(fromIndex);
+    const history = {
+      type: "HISTORY",
+      sessionId: msg.sessionId,
+      events,
+      totalEvents: session.buffer.totalCount,
+      firstAvailableEventIndex: firstAvailableIndex
+    };
+    registry.send(client.ws, history);
+    logger_default.debug(
+      `Client ${client.id} subscribed to session ${msg.sessionId} (from ${fromIndex}, sent ${events.length} events)`
+    );
   }
-  _handleResize(client, msg) {
+  _handleUnsubscribe(client, msg) {
+    this.deps.registry.removeSubscription(client.id, msg.sessionId);
+    this.deps.sessionManager.removeClientFromSession(
+      msg.sessionId,
+      client.id
+    );
+  }
+  async _handleControlMessage(client, env) {
     const { sessionManager, registry } = this.deps;
-    const session = sessionManager.getSession(msg.sessionId);
+    const session = sessionManager.getSession(env.sessionId);
     if (!session) {
-      registry.sendError(client.ws, "SESSION_NOT_FOUND", `Session ${msg.sessionId} not found`);
+      registry.sendError(
+        client.ws,
+        "SESSION_NOT_FOUND",
+        `Session ${env.sessionId} not found`
+      );
       return;
     }
-    session.resize(msg.cols, msg.rows);
+    const m = env.message;
+    try {
+      switch (m.type) {
+        case "send_user_message":
+          session.sendUserMessage(m.content);
+          return;
+        case "interrupt":
+          await session.interrupt();
+          return;
+        case "kill_session":
+          await sessionManager.killSession(m.sessionId);
+          return;
+        case "plan_accept":
+          session.resolveByToolUseId({
+            toolUseId: m.toolUseId,
+            decision: "allow"
+          });
+          return;
+        case "plan_reject":
+          session.resolveByToolUseId({
+            toolUseId: m.toolUseId,
+            decision: "deny",
+            message: m.reason
+          });
+          return;
+        case "answer_question":
+          session.resolveByToolUseId({
+            toolUseId: m.toolUseId,
+            decision: "allow",
+            updatedInput: { answers: m.answers }
+          });
+          return;
+        case "resolve_permission":
+          session.resolvePermission({
+            requestId: m.requestId,
+            decision: m.decision,
+            updatedInput: m.updatedInput
+          });
+          return;
+        case "change_permission_mode":
+          await session.setPermissionMode(m.mode);
+          return;
+        case "set_model":
+          await session.setModel(m.model);
+          return;
+        case "set_effort_level":
+          logger_default.info(
+            `set_effort_level (${m.level}) ignored mid-session \u2014 apply at next spawn`
+          );
+          return;
+        default: {
+          const _exhaustive = m;
+          void _exhaustive;
+          registry.sendError(
+            client.ws,
+            "UNKNOWN_CONTROL",
+            `Unknown control message type`
+          );
+        }
+      }
+    } catch (err) {
+      logger_default.warn(
+        `Control message error (session=${env.sessionId}, type=${m.type}): ${String(err)}`
+      );
+      registry.sendError(
+        client.ws,
+        "CONTROL_ERROR",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
   _handlePing(client) {
     const pong = { type: "PONG", timestamp: Date.now() };
@@ -2413,10 +2105,9 @@ var MessageRouter = class _MessageRouter {
 };
 
 // src/ws-transport.ts
-var http = __toESM(require("http"));
-var import_ws2 = require("ws");
-var import_uuid2 = require("uuid");
-init_logger();
+import * as http from "http";
+import { WebSocketServer } from "ws";
+import { v4 as uuidv42 } from "uuid";
 var MAX_PAYLOAD_BYTES = 1024 * 1024;
 var AUTH_TIMEOUT_MS = 1e4;
 var WsTransport = class {
@@ -2434,7 +2125,7 @@ var WsTransport = class {
   wss = null;
   async start() {
     this.httpServer = http.createServer();
-    this.wss = new import_ws2.WebSocketServer({
+    this.wss = new WebSocketServer({
       server: this.httpServer,
       maxPayload: MAX_PAYLOAD_BYTES
     });
@@ -2460,7 +2151,7 @@ var WsTransport = class {
   // Per-connection lifecycle
   // ────────────────────────────────────────────
   _handleConnection(ws) {
-    const clientId = (0, import_uuid2.v4)();
+    const clientId = uuidv42();
     const client = {
       id: clientId,
       name: "",
@@ -2502,7 +2193,6 @@ var WsTransport = class {
 };
 
 // src/notification-dispatcher.ts
-init_logger();
 var NotificationDispatcher = class {
   constructor(sessionManager, registry, pushService) {
     this.sessionManager = sessionManager;
@@ -2512,83 +2202,45 @@ var NotificationDispatcher = class {
   sessionManager;
   registry;
   pushService;
-  /** Track sessions that already have a data listener wired to avoid duplicates. */
   wiredSessions = /* @__PURE__ */ new Set();
-  /**
-   * Per-session pending OUTPUT line queue. Bursts of PTY data (which can
-   * arrive as 50-chunk bursts per visible block) are coalesced into a single
-   * OUTPUT broadcast per turn of the event loop.
-   */
-  pendingOutput = /* @__PURE__ */ new Map();
-  outputScheduled = /* @__PURE__ */ new Set();
-  /**
-   * Defense-in-depth cache of the last observed waitingForInput value per
-   * session. Session._resetIdleTimer is edge-triggered at the source today,
-   * but we don't want to depend on that invariant from a different module —
-   * if upstream ever re-emits current state (refactor, metadata refresh,
-   * resync), we still only push on the false→true edge as observed by us.
-   */
+  /** Pending event batches per session (flushed via setImmediate). */
+  pendingEvents = /* @__PURE__ */ new Map();
+  eventScheduled = /* @__PURE__ */ new Set();
+  /** Edge-detection cache for waitingForInput → push trigger. */
   waitingState = /* @__PURE__ */ new Map();
   start() {
-    this.sessionManager.on("session-added", (session) => {
-      this._onSessionAdded(session);
-    });
-    this.sessionManager.on("session-removed", (sessionId) => {
-      this._onSessionRemoved(sessionId);
-    });
+    this.sessionManager.on(
+      "session-added",
+      (session) => this._onSessionAdded(session)
+    );
+    this.sessionManager.on(
+      "session-removed",
+      (sessionId) => this._onSessionRemoved(sessionId)
+    );
     this.sessionManager.on(
       "session-updated",
-      (sessionId, changes) => {
-        this._onSessionUpdated(sessionId, changes);
-      }
+      (sessionId, changes) => this._onSessionUpdated(sessionId, changes)
+    );
+    this.sessionManager.on(
+      "session-event",
+      (sessionId, event, index) => this._enqueueSessionEvent(sessionId, event, index)
     );
   }
   // ────────────────────────────────────────────
-  // SessionManager event handlers
+  // Handlers
   // ────────────────────────────────────────────
   _onSessionAdded(session) {
     const msg = { type: "SESSION_ADDED", session };
     this.registry.broadcastAll(msg);
-    if (!this.wiredSessions.has(session.id)) {
-      const sessionObj = this.sessionManager.getSession(session.id);
-      if (sessionObj) {
-        this.wiredSessions.add(session.id);
-        const sessionId = session.id;
-        sessionObj.on("data", (lines) => {
-          if (lines.length === 0) return;
-          let queue = this.pendingOutput.get(sessionId);
-          if (!queue) {
-            queue = [];
-            this.pendingOutput.set(sessionId, queue);
-          }
-          for (const l of lines) queue.push(l);
-          if (!this.outputScheduled.has(sessionId)) {
-            this.outputScheduled.add(sessionId);
-            setImmediate(() => {
-              this.outputScheduled.delete(sessionId);
-              const batch = this.pendingOutput.get(sessionId);
-              this.pendingOutput.delete(sessionId);
-              if (!batch || batch.length === 0) return;
-              const out = {
-                type: "OUTPUT",
-                sessionId,
-                lines: batch
-              };
-              this.registry.broadcastToSession(sessionId, out);
-            });
-          }
-        });
-      }
-    }
+    this.wiredSessions.add(session.id);
   }
   _onSessionRemoved(sessionId) {
     const msg = { type: "SESSION_REMOVED", sessionId };
     this.registry.broadcastAll(msg);
     this.wiredSessions.delete(sessionId);
-    this.pendingOutput.delete(sessionId);
-    this.outputScheduled.delete(sessionId);
+    this.pendingEvents.delete(sessionId);
+    this.eventScheduled.delete(sessionId);
     this.waitingState.delete(sessionId);
-    this.registry.clearInputLock(sessionId);
   }
   _onSessionUpdated(sessionId, changes) {
     const msg = { type: "SESSION_UPDATED", sessionId, changes };
@@ -2602,13 +2254,38 @@ var NotificationDispatcher = class {
         const name = session?.info.name ?? "Claude";
         this.pushService.sendToAll(
           `${name} needs input`,
-          "Claude has finished its task and is waiting for your response.",
+          "Claude is waiting for your response.",
           { sessionId }
         ).catch((err) => {
           logger_default.warn(`FCM push error: ${String(err)}`);
         });
       }
     }
+  }
+  _enqueueSessionEvent(sessionId, event, eventIndex) {
+    let queue = this.pendingEvents.get(sessionId);
+    if (!queue) {
+      queue = [];
+      this.pendingEvents.set(sessionId, queue);
+    }
+    queue.push({ event, eventIndex });
+    if (this.eventScheduled.has(sessionId)) return;
+    this.eventScheduled.add(sessionId);
+    setImmediate(() => {
+      this.eventScheduled.delete(sessionId);
+      const batch = this.pendingEvents.get(sessionId);
+      this.pendingEvents.delete(sessionId);
+      if (!batch || batch.length === 0) return;
+      for (const { event: ev, eventIndex: idx } of batch) {
+        const out = {
+          type: "SESSION_EVENT",
+          sessionId,
+          eventIndex: idx,
+          event: ev
+        };
+        this.registry.broadcastToSession(sessionId, out);
+      }
+    });
   }
 };
 
@@ -2643,14 +2320,10 @@ var WsServer = class {
   }
 };
 
-// src/daemon.ts
-init_wrap_server();
-
 // src/push.ts
-var fs7 = __toESM(require("fs"));
-var https = __toESM(require("https"));
-var crypto3 = __toESM(require("crypto"));
-init_logger();
+import * as fs6 from "fs";
+import * as https from "https";
+import * as crypto3 from "crypto";
 function base64url(buf) {
   return buf.toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
@@ -2719,8 +2392,8 @@ var PushService = class {
   constructor(serviceAccountPath) {
     const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
     try {
-      if (fs7.existsSync(saPath)) {
-        const stat = fs7.statSync(saPath);
+      if (fs6.existsSync(saPath)) {
+        const stat = fs6.statSync(saPath);
         const looseBits = stat.mode & 63;
         if (looseBits !== 0) {
           const modeStr = (stat.mode & 511).toString(8).padStart(3, "0");
@@ -2728,7 +2401,7 @@ var PushService = class {
             `fcm-service-account.json mode is 0${modeStr} \u2014 readable by group/other. FCM private key should be 0600. Run: chmod 600 ${saPath}`
           );
         }
-        const raw = fs7.readFileSync(saPath, "utf-8");
+        const raw = fs6.readFileSync(saPath, "utf-8");
         this.serviceAccount = JSON.parse(raw);
         logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
       } else {
@@ -2836,10 +2509,9 @@ var PushService = class {
 };
 
 // src/tailscale.ts
-var import_child_process = require("child_process");
-var import_util = require("util");
-init_logger();
-var execFileAsync = (0, import_util.promisify)(import_child_process.execFile);
+import { execFile } from "child_process";
+import { promisify } from "util";
+var execFileAsync = promisify(execFile);
 async function getTailscaleIP() {
   if (process.env["WALCCY_DEV_MODE"] === "1") {
     return "127.0.0.1";
@@ -2882,13 +2554,10 @@ function delay(ms) {
 }
 
 // src/daemon.ts
-init_logger();
 var Daemon = class {
   config;
   sessionManager;
-  processScanner;
   wsServer;
-  wrapServer;
   async start() {
     this.config = loadConfig();
     setLogLevel(this.config.logLevel);
@@ -2902,30 +2571,14 @@ var Daemon = class {
       bindAddress = await waitForTailscale();
     }
     this.sessionManager = new SessionManager(this.config.maxBufferLines);
-    this.processScanner = new ProcessScanner();
     const pushService = new PushService();
-    this.wsServer = new WsServer(this.sessionManager, this.config, bindAddress, pushService);
-    this.wrapServer = new WrapServer(this.sessionManager);
-    this.processScanner.on("process-found", async (pid, cwd) => {
-      if (this.sessionManager.getSessionByPid(pid)) return;
-      const session = this.sessionManager.createSession(pid, cwd);
-      try {
-        await session.attach();
-      } catch (err) {
-        logger_default.warn(`Failed to attach to pid=${pid}: ${String(err)}`);
-      }
-    });
-    this.processScanner.on("process-lost", (pid) => {
-      const session = this.sessionManager.getSessionByPid(pid);
-      if (session) {
-        this.sessionManager.removeSession(session.id);
-      }
-    });
+    this.wsServer = new WsServer(
+      this.sessionManager,
+      this.config,
+      bindAddress,
+      pushService
+    );
     await this.wsServer.start();
-    await this.wrapServer.start();
-    if (this.config.autoDetect) {
-      this.processScanner.start(this.config.autoDetectInterval);
-    }
     if (this.config.attachIdlePruneMs > 0) {
       this.sessionManager.startIdlePrune(this.config.attachIdlePruneMs);
     }
@@ -2935,11 +2588,9 @@ var Daemon = class {
   }
   async stop() {
     logger_default.info("Walccy daemon stopping\u2026");
-    this.processScanner?.stop();
     this.sessionManager?.stopIdlePrune();
     this.sessionManager?.stopTranscriptWatcher();
     this.wsServer?.stop();
-    await this.wrapServer?.stop();
     for (const session of this.sessionManager?.getAllSessions() ?? []) {
       this.sessionManager.removeSession(session.id);
     }
@@ -2948,21 +2599,21 @@ var Daemon = class {
 };
 
 // src/installer.ts
-var fs8 = __toESM(require("fs"));
-var path8 = __toESM(require("path"));
-var os6 = __toESM(require("os"));
-var import_child_process2 = require("child_process");
-var import_util2 = require("util");
-var execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
+import * as fs7 from "fs";
+import * as path6 from "path";
+import * as os5 from "os";
+import { execFile as execFile2 } from "child_process";
+import { promisify as promisify2 } from "util";
+var execFileAsync2 = promisify2(execFile2);
 function getServiceDir() {
-  return path8.join(os6.homedir(), ".config", "systemd", "user");
+  return path6.join(os5.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path8.join(getServiceDir(), "walccy.service");
+  return path6.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path8.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path6.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -2985,10 +2636,10 @@ WantedBy=default.target
 async function installSystemdService() {
   const serviceDir = getServiceDir();
   const servicePath = getServicePath();
-  if (!fs8.existsSync(serviceDir)) {
-    fs8.mkdirSync(serviceDir, { recursive: true });
+  if (!fs7.existsSync(serviceDir)) {
+    fs7.mkdirSync(serviceDir, { recursive: true });
   }
-  fs8.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
+  fs7.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
   console.log(`Wrote systemd unit: ${servicePath}`);
   try {
     await execFileAsync2("systemctl", ["--user", "daemon-reload"]);
@@ -3012,8 +2663,8 @@ async function uninstallSystemdService() {
     await execFileAsync2("systemctl", ["--user", "disable", "walccy.service"]);
   } catch {
   }
-  if (fs8.existsSync(servicePath)) {
-    fs8.unlinkSync(servicePath);
+  if (fs7.existsSync(servicePath)) {
+    fs7.unlinkSync(servicePath);
     console.log(`Removed systemd unit: ${servicePath}`);
   } else {
     console.log("No systemd unit file found.");
@@ -3026,7 +2677,7 @@ async function uninstallSystemdService() {
 }
 async function getServiceStatus() {
   const servicePath = getServicePath();
-  if (!fs8.existsSync(servicePath)) {
+  if (!fs7.existsSync(servicePath)) {
     return "not-installed";
   }
   try {
@@ -3043,8 +2694,7 @@ async function getServiceStatus() {
 }
 
 // src/index.ts
-var qrcode = require("qrcode-terminal");
-var program = new import_commander.Command();
+var program = new Command();
 program.name("walccy").version(package_default.version).description("Walccy \u2014 Claude session daemon");
 program.command("start").description("Start the Walccy daemon").option("-f, --foreground", "Run in the foreground (blocks)", false).action(async (opts) => {
   if (!opts.foreground) {
@@ -3148,7 +2798,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os8.hostname();
+  const hostname2 = os6.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -3159,6 +2809,7 @@ program.command("pair").description("Display QR code for mobile pairing").action
   const pairingJson = JSON.stringify(pairingData);
   console.log("\nWalccy pairing QR code:");
   console.log("Scan with the Walccy mobile app\n");
+  const qrcode = (await import("qrcode-terminal")).default;
   qrcode.generate(pairingJson, { small: true }, (qr) => {
     console.log(qr);
   });
@@ -3207,15 +2858,15 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path11.dirname(configPath);
-        const fs11 = await import("fs");
-        if (fs11.existsSync(configDir)) {
-          fs11.rmSync(configDir, { recursive: true, force: true });
+        const configDir = path7.dirname(configPath);
+        const fs8 = await import("fs");
+        if (fs8.existsSync(configDir)) {
+          fs8.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path11.join(os8.homedir(), ".walccy");
-        if (fs11.existsSync(logDir2)) {
-          fs11.rmSync(logDir2, { recursive: true, force: true });
+        const logDir2 = path7.join(os6.homedir(), ".walccy");
+        if (fs8.existsSync(logDir2)) {
+          fs8.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");
@@ -3237,45 +2888,6 @@ program.command("unregister-session").description("Unregister a shell session (u
   process.stdout.write(`[walccy] session unregistered: pid=${pid}
 `);
 });
-program.command("install-shell").description(
-  "Install a shell function in your bashrc/zshrc so that running `claude` automatically wraps it via walccy."
-).action(async () => {
-  const { installShellIntegration: installShellIntegration2 } = await Promise.resolve().then(() => (init_shell_installer(), shell_installer_exports));
-  const result = installShellIntegration2();
-  for (const p of result.modified) {
-    console.log(`  modified: ${p}`);
-  }
-  for (const s of result.skipped) {
-    console.log(`  skipped:  ${s}`);
-  }
-  if (result.modified.length > 0) {
-    console.log("\nOpen a new shell (or `source` the file above) to activate.");
-  }
-});
-program.command("uninstall-shell").description("Remove the walccy shell integration from your bashrc/zshrc.").action(async () => {
-  const { uninstallShellIntegration: uninstallShellIntegration2 } = await Promise.resolve().then(() => (init_shell_installer(), shell_installer_exports));
-  const result = uninstallShellIntegration2();
-  for (const p of result.modified) {
-    console.log(`  cleaned:  ${p}`);
-  }
-  for (const s of result.skipped) {
-    console.log(`  skipped:  ${s}`);
-  }
-});
-program.command("wrap").description(
-  "Run a command (default: claude) inside a PTY whose output is mirrored to the running daemon, so the mobile app can see it and send input back."
-).argument("[args...]", 'Command and arguments (defaults to "claude")').allowUnknownOption(true).action(async (args) => {
-  const { runWrapper: runWrapper2 } = await Promise.resolve().then(() => (init_wrap_cli(), wrap_cli_exports));
-  await runWrapper2(args ?? []);
-});
-var KNOWN_SUBCOMMANDS = /* @__PURE__ */ new Set([
-  ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
-  "help"
-]);
-var firstArg = process.argv[2];
-if (firstArg && !firstArg.startsWith("-") && !KNOWN_SUBCOMMANDS.has(firstArg)) {
-  process.argv.splice(2, 0, "wrap");
-}
 program.parseAsync(process.argv).catch((err) => {
   console.error(err);
   process.exit(1);

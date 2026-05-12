@@ -1,22 +1,20 @@
 import type {
   ClientMessage,
   ServerMessage,
+  ControlMessage,
+  ControlMessageEnvelope,
   DirectoryEntry,
+  PermissionMode,
+  EffortLevel,
 } from '@walccy/protocol';
 import { SessionManager } from './session-manager.js';
 import { DirectoryScanner, recentCwdsFromSessions } from './directory-scanner.js';
 import { PushService } from './push.js';
 import type { WalccyConfig } from './config.js';
-import {
-  ClientRegistry,
-  ConnectedClient,
-  INPUT_LOCK_TTL_MS,
-} from './client-registry.js';
+import { ClientRegistry, ConnectedClient } from './client-registry.js';
 import { handleAuth } from './auth-handler.js';
 import { handleSpawnSession } from './spawn-handler.js';
 import logger from './logger.js';
-
-const MAX_INPUT_LENGTH = 64 * 1024; // 64 KB max input
 
 export interface RouterDeps {
   sessionManager: SessionManager;
@@ -30,8 +28,10 @@ export interface RouterDeps {
 // MessageRouter
 // ──────────────────────────────────────────────
 //
-// Pure dispatch table. Validates, narrows by msg.type, then calls the right
-// handler. Handlers know about deps but not about transport/framing.
+// Pure dispatch. Validates, narrows by msg.type, then calls the right
+// handler. Control plane (interrupt, plan_accept, set_model, etc.) lives
+// in ControlMessageEnvelope; everything else is its own top-level wire
+// message.
 
 export class MessageRouter {
   private listDirsCache: { at: number; entries: DirectoryEntry[] } | null = null;
@@ -41,26 +41,35 @@ export class MessageRouter {
 
   constructor(private readonly deps: RouterDeps) {}
 
-  /**
-   * Entry point invoked by ws-transport for every parsed JSON message.
-   */
   dispatch(client: ConnectedClient, msg: unknown): void {
     if (typeof msg !== 'object' || msg === null || !('type' in msg)) {
-      this.deps.registry.sendError(client.ws, 'INVALID_MESSAGE', 'Missing type field');
+      this.deps.registry.sendError(
+        client.ws,
+        'INVALID_MESSAGE',
+        'Missing type field'
+      );
       return;
     }
 
     const typed = msg as ClientMessage;
 
     if (!this._validateMessage(typed)) {
-      this.deps.registry.sendError(client.ws, 'INVALID_MESSAGE', 'Invalid message fields');
+      this.deps.registry.sendError(
+        client.ws,
+        'INVALID_MESSAGE',
+        'Invalid message fields'
+      );
       return;
     }
 
     // AUTH must be first
     if (!client.isAuthenticated) {
       if (typed.type !== 'AUTH') {
-        this.deps.registry.sendError(client.ws, 'NOT_AUTHENTICATED', 'Send AUTH first');
+        this.deps.registry.sendError(
+          client.ws,
+          'NOT_AUTHENTICATED',
+          'Send AUTH first'
+        );
         client.ws.close(1008, 'Not authenticated');
         return;
       }
@@ -85,12 +94,6 @@ export class MessageRouter {
       case 'UNSUBSCRIBE':
         this._handleUnsubscribe(client, typed);
         break;
-      case 'INPUT':
-        this._handleInput(client, typed);
-        break;
-      case 'RESIZE':
-        this._handleResize(client, typed);
-        break;
       case 'PING':
         this._handlePing(client);
         break;
@@ -108,11 +111,18 @@ export class MessageRouter {
           config: this.deps.config,
         });
         break;
-      case 'KILL_SESSION':
-        this._handleKillSession(client, typed);
+      case 'CONTROL_MESSAGE':
+        void this._handleControlMessage(client, typed);
         break;
-      default:
-        this.deps.registry.sendError(client.ws, 'UNKNOWN_TYPE', 'Unknown message type');
+      default: {
+        const _exhaustive: never = typed;
+        void _exhaustive;
+        this.deps.registry.sendError(
+          client.ws,
+          'UNKNOWN_TYPE',
+          'Unknown message type'
+        );
+      }
     }
   }
 
@@ -123,46 +133,49 @@ export class MessageRouter {
   private _validateMessage(msg: ClientMessage): boolean {
     switch (msg.type) {
       case 'AUTH':
-        return typeof msg.secret === 'string' && typeof msg.clientId === 'string';
+        return (
+          typeof msg.secret === 'string' && typeof msg.clientId === 'string'
+        );
       case 'LIST_SESSIONS':
       case 'PING':
         return true;
       case 'SUBSCRIBE':
         return (
           typeof msg.sessionId === 'string' &&
-          (msg.fromLine === undefined || (typeof msg.fromLine === 'number' && Number.isInteger(msg.fromLine) && msg.fromLine >= 0))
+          (msg.fromEventIndex === undefined ||
+            (typeof msg.fromEventIndex === 'number' &&
+              Number.isInteger(msg.fromEventIndex) &&
+              msg.fromEventIndex >= 0))
         );
       case 'UNSUBSCRIBE':
         return typeof msg.sessionId === 'string';
-      case 'INPUT':
-        return (
-          typeof msg.sessionId === 'string' &&
-          typeof msg.data === 'string' &&
-          msg.data.length <= MAX_INPUT_LENGTH
-        );
-      case 'RESIZE':
-        return (
-          typeof msg.sessionId === 'string' &&
-          typeof msg.cols === 'number' && Number.isInteger(msg.cols) && msg.cols > 0 && msg.cols <= 1000 &&
-          typeof msg.rows === 'number' && Number.isInteger(msg.rows) && msg.rows > 0 && msg.rows <= 500
-        );
       case 'REGISTER_PUSH_TOKEN':
         return (
-          typeof msg.token === 'string' && msg.token.length > 0 &&
+          typeof msg.token === 'string' &&
+          msg.token.length > 0 &&
           (msg.platform === 'android' || msg.platform === 'ios')
         );
       case 'LIST_DIRECTORIES':
-        return msg.query === undefined || (typeof msg.query === 'string' && msg.query.length <= 256);
+        return (
+          msg.query === undefined ||
+          (typeof msg.query === 'string' && msg.query.length <= 256)
+        );
       case 'SPAWN_SESSION':
         return (
-          typeof msg.cwd === 'string' && msg.cwd.length > 0 && msg.cwd.length <= 4096 &&
-          typeof msg.requestId === 'string' && msg.requestId.length > 0
+          typeof msg.cwd === 'string' &&
+          msg.cwd.length > 0 &&
+          msg.cwd.length <= 4096 &&
+          typeof msg.requestId === 'string' &&
+          msg.requestId.length > 0
         );
-      case 'KILL_SESSION':
-        return typeof msg.sessionId === 'string' && msg.sessionId.length > 0;
+      case 'CONTROL_MESSAGE':
+        return (
+          typeof msg.sessionId === 'string' &&
+          msg.sessionId.length > 0 &&
+          typeof msg.message === 'object' &&
+          msg.message !== null
+        );
       default: {
-        // exhaustiveness check — if a new ClientMessage variant is added without
-        // a case here, TS errors at compile time (`msg` won't narrow to never).
         const _exhaustive: never = msg;
         void _exhaustive;
         return false;
@@ -186,101 +199,9 @@ export class MessageRouter {
     client: ConnectedClient,
     msg: ClientMessage & { type: 'SUBSCRIBE' }
   ): void {
-    const { sessionManager, registry, config } = this.deps;
-    const session = sessionManager.getSession(msg.sessionId);
-    if (!session) {
-      registry.sendError(client.ws, 'SESSION_NOT_FOUND', `Session ${msg.sessionId} not found`);
-      return;
-    }
-
-    registry.addSubscription(client.id, msg.sessionId);
-    sessionManager.addClientToSession(msg.sessionId, client.id);
-
-    if (msg.fromLine !== undefined) {
-      const lines = session.buffer.getLines(msg.fromLine);
-      const reply: ServerMessage = {
-        type: 'RESUME',
-        sessionId: msg.sessionId,
-        lines,
-        totalLines: session.buffer.totalLinesReceived,
-      };
-      registry.send(client.ws, reply);
-      logger.debug(
-        `Client ${client.id} resumed session ${msg.sessionId} from line ${msg.fromLine}, sent ${lines.length} lines`
-      );
-    } else {
-      const historyCount = config.historyOnConnect;
-      const lines = session.buffer.getRecent(historyCount);
-      const history: ServerMessage = {
-        type: 'HISTORY',
-        sessionId: msg.sessionId,
-        lines,
-        totalLines: session.buffer.totalLinesReceived,
-        firstAvailableLine: session.buffer.firstAvailableLine(),
-      };
-      registry.send(client.ws, history);
-      logger.debug(
-        `Client ${client.id} subscribed to session ${msg.sessionId}, sent ${lines.length} history lines`
-      );
-    }
-  }
-
-  private _handleUnsubscribe(
-    client: ConnectedClient,
-    msg: ClientMessage & { type: 'UNSUBSCRIBE' }
-  ): void {
-    this.deps.registry.removeSubscription(client.id, msg.sessionId);
-    this.deps.sessionManager.removeClientFromSession(msg.sessionId, client.id);
-    logger.debug(`Client ${client.id} unsubscribed from session ${msg.sessionId}`);
-  }
-
-  private _handleInput(
-    client: ConnectedClient,
-    msg: ClientMessage & { type: 'INPUT' }
-  ): void {
     const { sessionManager, registry } = this.deps;
     const session = sessionManager.getSession(msg.sessionId);
     if (!session) {
-      registry.sendError(client.ws, 'SESSION_NOT_FOUND', `Session ${msg.sessionId} not found`);
-      return;
-    }
-
-    // Check input lock
-    const lock = registry.getInputLock(msg.sessionId);
-    if (lock && lock.expiresAt > Date.now() && lock.clientId !== client.id) {
-      const lockMsg: ServerMessage = {
-        type: 'INPUT_LOCK',
-        sessionId: msg.sessionId,
-        lockedByClientId: lock.clientId,
-        lockedByClientName: lock.clientName,
-        expiresAt: lock.expiresAt,
-      };
-      registry.send(client.ws, lockMsg);
-      return;
-    }
-
-    if (!session.owned) {
-      // Read-only / attach-mode session: skip the lock entirely.  session.write
-      // would log+no-op anyway, no point also locking other clients out.
-      session.write(msg.data, client.id);
-      return;
-    }
-
-    registry.setInputLock(msg.sessionId, {
-      clientId: client.id,
-      clientName: client.name,
-      expiresAt: Date.now() + INPUT_LOCK_TTL_MS,
-    });
-    session.write(msg.data, client.id);
-  }
-
-  private _handleKillSession(
-    client: ConnectedClient,
-    msg: ClientMessage & { type: 'KILL_SESSION' }
-  ): void {
-    const { sessionManager, registry } = this.deps;
-    const ok = sessionManager.killSession(msg.sessionId);
-    if (!ok) {
       registry.sendError(
         client.ws,
         'SESSION_NOT_FOUND',
@@ -288,20 +209,127 @@ export class MessageRouter {
       );
       return;
     }
-    logger.info(`Client ${client.id} killed session ${msg.sessionId}`);
+
+    registry.addSubscription(client.id, msg.sessionId);
+    sessionManager.addClientToSession(msg.sessionId, client.id);
+
+    const fromIndex = msg.fromEventIndex ?? 0;
+    const { events, firstAvailableIndex } = session.buffer.getFrom(fromIndex);
+    const history: ServerMessage = {
+      type: 'HISTORY',
+      sessionId: msg.sessionId,
+      events,
+      totalEvents: session.buffer.totalCount,
+      firstAvailableEventIndex: firstAvailableIndex,
+    };
+    registry.send(client.ws, history);
+    logger.debug(
+      `Client ${client.id} subscribed to session ${msg.sessionId} (from ${fromIndex}, sent ${events.length} events)`
+    );
   }
 
-  private _handleResize(
+  private _handleUnsubscribe(
     client: ConnectedClient,
-    msg: ClientMessage & { type: 'RESIZE' }
+    msg: ClientMessage & { type: 'UNSUBSCRIBE' }
   ): void {
+    this.deps.registry.removeSubscription(client.id, msg.sessionId);
+    this.deps.sessionManager.removeClientFromSession(
+      msg.sessionId,
+      client.id
+    );
+  }
+
+  private async _handleControlMessage(
+    client: ConnectedClient,
+    env: ControlMessageEnvelope
+  ): Promise<void> {
     const { sessionManager, registry } = this.deps;
-    const session = sessionManager.getSession(msg.sessionId);
+    const session = sessionManager.getSession(env.sessionId);
     if (!session) {
-      registry.sendError(client.ws, 'SESSION_NOT_FOUND', `Session ${msg.sessionId} not found`);
+      registry.sendError(
+        client.ws,
+        'SESSION_NOT_FOUND',
+        `Session ${env.sessionId} not found`
+      );
       return;
     }
-    session.resize(msg.cols, msg.rows);
+
+    const m: ControlMessage = env.message;
+    try {
+      switch (m.type) {
+        case 'send_user_message':
+          session.sendUserMessage(m.content);
+          return;
+        case 'interrupt':
+          await session.interrupt();
+          return;
+        case 'kill_session':
+          await sessionManager.killSession(m.sessionId);
+          return;
+        case 'plan_accept':
+          session.resolveByToolUseId({
+            toolUseId: m.toolUseId,
+            decision: 'allow',
+          });
+          return;
+        case 'plan_reject':
+          session.resolveByToolUseId({
+            toolUseId: m.toolUseId,
+            decision: 'deny',
+            message: m.reason,
+          });
+          return;
+        case 'answer_question':
+          // The model expects updatedInput.questions[i].answer; map answers
+          // array into a shape the AskUserQuestion tool tolerates. The
+          // simplest viable wire-form is { answers } — the SDK uses this
+          // verbatim as the tool's input for the next turn.
+          session.resolveByToolUseId({
+            toolUseId: m.toolUseId,
+            decision: 'allow',
+            updatedInput: { answers: m.answers },
+          });
+          return;
+        case 'resolve_permission':
+          session.resolvePermission({
+            requestId: m.requestId,
+            decision: m.decision,
+            updatedInput: m.updatedInput,
+          });
+          return;
+        case 'change_permission_mode':
+          await session.setPermissionMode(m.mode as PermissionMode);
+          return;
+        case 'set_model':
+          await session.setModel(m.model);
+          return;
+        case 'set_effort_level':
+          // SDK doesn't expose mid-session effort change yet; log + ignore
+          // (next spawn picks it up via SpawnSessionMessage.effortLevel).
+          logger.info(
+            `set_effort_level (${m.level as EffortLevel}) ignored mid-session — apply at next spawn`
+          );
+          return;
+        default: {
+          const _exhaustive: never = m;
+          void _exhaustive;
+          registry.sendError(
+            client.ws,
+            'UNKNOWN_CONTROL',
+            `Unknown control message type`
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        `Control message error (session=${env.sessionId}, type=${m.type}): ${String(err)}`
+      );
+      registry.sendError(
+        client.ws,
+        'CONTROL_ERROR',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
 
   private _handlePing(client: ConnectedClient): void {
@@ -323,7 +351,6 @@ export class MessageRouter {
     msg: ClientMessage & { type: 'LIST_DIRECTORIES' }
   ): void {
     const { sessionManager, directoryScanner, registry } = this.deps;
-
     const now = Date.now();
     const last = this.clientListDirsAt.get(client.id) ?? 0;
     if (
@@ -331,7 +358,6 @@ export class MessageRouter {
       this.listDirsCache &&
       now - this.listDirsCache.at < MessageRouter.LIST_DIRS_CACHE_TTL_MS
     ) {
-      // Per-client rate-limit hit; serve cache silently.
       registry.send(client.ws, {
         type: 'DIRECTORY_LIST',
         directories: this.listDirsCache.entries,
@@ -363,5 +389,4 @@ export class MessageRouter {
     const reply: ServerMessage = { type: 'DIRECTORY_LIST', directories };
     registry.send(client.ws, reply);
   }
-
 }

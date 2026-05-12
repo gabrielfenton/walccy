@@ -10,6 +10,8 @@
 
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
+import { execFileSync } from 'child_process';
+import * as fs from 'fs';
 import {
   query,
   type Query,
@@ -27,6 +29,40 @@ import type {
 } from '@walccy/protocol';
 import { translate, buildPermissionRequest } from './stream-translator.js';
 import logger from './logger.js';
+
+// ──────────────────────────────────────────────
+// Resolve the claude CLI executable
+// ──────────────────────────────────────────────
+//
+// The SDK's default executable lookup expects a native installer layout
+// (node_modules/@anthropic-ai/claude-agent-sdk-<platform>/claude) that
+// isn't there when claude was installed via nvm/npm-global. We resolve
+// once at module load via `which claude` and pass the absolute path to
+// each query() invocation. WALCCY_CLAUDE_PATH overrides for tests.
+
+let cachedClaudePath: string | undefined;
+
+function resolveClaudePath(): string | undefined {
+  if (cachedClaudePath !== undefined) return cachedClaudePath || undefined;
+  const override = process.env['WALCCY_CLAUDE_PATH'];
+  if (override && fs.existsSync(override)) {
+    cachedClaudePath = override;
+    return cachedClaudePath;
+  }
+  try {
+    const out = execFileSync('which', ['claude'], { encoding: 'utf8' }).trim();
+    if (out && fs.existsSync(out)) {
+      cachedClaudePath = out;
+      logger.info(`ClaudeDriver: resolved claude binary → ${out}`);
+      return cachedClaudePath;
+    }
+  } catch {
+    // fall through
+  }
+  // Empty string sentinel = looked but didn't find; SDK will use its default.
+  cachedClaudePath = '';
+  return undefined;
+}
 
 // ──────────────────────────────────────────────
 // User-message input queue
@@ -188,6 +224,7 @@ export class ClaudeDriver extends EventEmitter {
       forkSession: this.opts.forkSession,
       env: this.opts.env ?? process.env,
       extraArgs: this.opts.extraArgs,
+      pathToClaudeCodeExecutable: resolveClaudePath(),
       canUseTool,
       includePartialMessages: true,
     };

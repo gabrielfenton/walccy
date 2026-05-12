@@ -7,7 +7,7 @@ import {
 } from './client-registry.js';
 import { PushService } from './push.js';
 import logger from './logger.js';
-import pkg from '../package.json';
+import pkg from '../package.json' with { type: 'json' };
 
 const DAEMON_VERSION: string = pkg.version;
 

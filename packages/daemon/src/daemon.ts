@@ -1,9 +1,7 @@
 import { loadConfig } from './config.js';
 import type { WalccyConfig } from './config.js';
 import { SessionManager } from './session-manager.js';
-import { ProcessScanner } from './process-scanner.js';
 import { WsServer } from './ws-server.js';
-import { WrapServer } from './wrap-server.js';
 import { PushService } from './push.js';
 import { waitForTailscale } from './tailscale.js';
 import logger, { setLogLevel } from './logger.js';
@@ -11,18 +9,14 @@ import logger, { setLogLevel } from './logger.js';
 export class Daemon {
   private config!: WalccyConfig;
   private sessionManager!: SessionManager;
-  private processScanner!: ProcessScanner;
   private wsServer!: WsServer;
-  private wrapServer!: WrapServer;
 
   async start(): Promise<void> {
-    // 1. Load config
     this.config = loadConfig();
     setLogLevel(this.config.logLevel);
 
     logger.info('Walccy daemon starting…');
 
-    // 2. Resolve bind address
     let bindAddress: string;
     if (process.env['WALCCY_DEV_MODE'] === '1') {
       bindAddress = '127.0.0.1';
@@ -32,44 +26,17 @@ export class Daemon {
       bindAddress = await waitForTailscale();
     }
 
-    // 3. Initialize subsystems
     this.sessionManager = new SessionManager(this.config.maxBufferLines);
-    this.processScanner = new ProcessScanner();
     const pushService = new PushService();
-    this.wsServer = new WsServer(this.sessionManager, this.config, bindAddress, pushService);
-    this.wrapServer = new WrapServer(this.sessionManager);
+    this.wsServer = new WsServer(
+      this.sessionManager,
+      this.config,
+      bindAddress,
+      pushService
+    );
 
-    // 4. Wire process scanner → session manager
-    this.processScanner.on('process-found', async (pid: number, cwd: string) => {
-      // Skip if already tracked
-      if (this.sessionManager.getSessionByPid(pid)) return;
-
-      const session = this.sessionManager.createSession(pid, cwd);
-      // Attempt to attach (read-only monitor)
-      try {
-        await session.attach();
-      } catch (err) {
-        logger.warn(`Failed to attach to pid=${pid}: ${String(err)}`);
-      }
-    });
-
-    this.processScanner.on('process-lost', (pid: number) => {
-      const session = this.sessionManager.getSessionByPid(pid);
-      if (session) {
-        this.sessionManager.removeSession(session.id);
-      }
-    });
-
-    // 5. Start WS server + wrapper IPC
     await this.wsServer.start();
-    await this.wrapServer.start();
 
-    // 6. Start process scanner (if auto-detect enabled)
-    if (this.config.autoDetect) {
-      this.processScanner.start(this.config.autoDetectInterval);
-    }
-
-    // 7. Start idle-attach pruning
     if (this.config.attachIdlePruneMs > 0) {
       this.sessionManager.startIdlePrune(this.config.attachIdlePruneMs);
     }
@@ -81,13 +48,10 @@ export class Daemon {
 
   async stop(): Promise<void> {
     logger.info('Walccy daemon stopping…');
-    this.processScanner?.stop();
     this.sessionManager?.stopIdlePrune();
     this.sessionManager?.stopTranscriptWatcher();
     this.wsServer?.stop();
-    await this.wrapServer?.stop();
 
-    // Remove all sessions
     for (const session of this.sessionManager?.getAllSessions() ?? []) {
       this.sessionManager.removeSession(session.id);
     }

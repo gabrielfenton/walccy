@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
-import pkg from '../package.json';
+import pkg from '../package.json' with { type: 'json' };
 import { Daemon } from './daemon.js';
 import { loadConfig, getConfigPath } from './config.js';
 import { getTailscaleIP } from './tailscale.js';
@@ -14,12 +14,12 @@ import {
 } from './installer.js';
 
 // ──────────────────────────────────────────────
-// qrcode-terminal lacks type declarations — use require
+// qrcode-terminal — CJS package, dynamic-imported in the pair action.
 // ──────────────────────────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const qrcode = require('qrcode-terminal') as {
+interface QrcodeTerminal {
   generate(text: string, opts: { small: boolean }, cb: (qr: string) => void): void;
-};
+}
+
 
 // ──────────────────────────────────────────────
 // CLI
@@ -192,6 +192,8 @@ program
     console.log('\nWalccy pairing QR code:');
     console.log('Scan with the Walccy mobile app\n');
 
+    // qrcode-terminal has no types; cast through unknown.
+    const qrcode = (await import('qrcode-terminal')).default as unknown as QrcodeTerminal;
     qrcode.generate(pairingJson, { small: true }, (qr: string) => {
       console.log(qr);
     });
@@ -318,74 +320,13 @@ program
     process.stdout.write(`[walccy] session unregistered: pid=${pid}\n`);
   });
 
-// ── wrap ──────────────────────────────────────
-// Mirror an existing terminal session to the daemon.
-
-program
-  .command('install-shell')
-  .description(
-    'Install a shell function in your bashrc/zshrc so that running `claude` automatically wraps it via walccy.'
-  )
-  .action(async () => {
-    const { installShellIntegration } = await import('./shell-installer.js');
-    const result = installShellIntegration();
-    for (const p of result.modified) {
-      console.log(`  modified: ${p}`);
-    }
-    for (const s of result.skipped) {
-      console.log(`  skipped:  ${s}`);
-    }
-    if (result.modified.length > 0) {
-      console.log('\nOpen a new shell (or `source` the file above) to activate.');
-    }
-  });
-
-program
-  .command('uninstall-shell')
-  .description('Remove the walccy shell integration from your bashrc/zshrc.')
-  .action(async () => {
-    const { uninstallShellIntegration } = await import('./shell-installer.js');
-    const result = uninstallShellIntegration();
-    for (const p of result.modified) {
-      console.log(`  cleaned:  ${p}`);
-    }
-    for (const s of result.skipped) {
-      console.log(`  skipped:  ${s}`);
-    }
-  });
-
-program
-  .command('wrap')
-  .description(
-    'Run a command (default: claude) inside a PTY whose output is mirrored to the running daemon, so the mobile app can see it and send input back.'
-  )
-  .argument('[args...]', 'Command and arguments (defaults to "claude")')
-  .allowUnknownOption(true)
-  .action(async (args: string[]) => {
-    const { runWrapper } = await import('./wrap-cli.js');
-    await runWrapper(args ?? []);
-  });
-
 // ──────────────────────────────────────────────
 // Run
 // ──────────────────────────────────────────────
-
-// Convenience shorthand: `walccy <bin> [args...]` is interpreted as
-// `walccy wrap <bin> [args...]` whenever <bin> isn't one of our own
-// subcommands.  This lets users type `walccy claude` instead of
-// `walccy wrap claude`.
-const KNOWN_SUBCOMMANDS = new Set<string>([
-  ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
-  'help',
-]);
-const firstArg = process.argv[2];
-if (
-  firstArg &&
-  !firstArg.startsWith('-') &&
-  !KNOWN_SUBCOMMANDS.has(firstArg)
-) {
-  process.argv.splice(2, 0, 'wrap');
-}
+// Note: walccy v1 had `walccy wrap` / `walccy install-shell` subcommands
+// for mirroring an already-running TUI claude into the daemon. v2 switched
+// to a daemon-spawned Agent SDK driver — wrap is no longer possible (the
+// SDK owns the subprocess directly).
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err);

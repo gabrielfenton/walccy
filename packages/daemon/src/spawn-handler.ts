@@ -1,4 +1,7 @@
-import type { ServerMessage, SpawnSessionMessage } from '@walccy/protocol';
+import type {
+  ServerMessage,
+  SpawnSessionMessage,
+} from '@walccy/protocol';
 import { SessionManager } from './session-manager.js';
 import { DirectoryScanner } from './directory-scanner.js';
 import { ClientRegistry, ConnectedClient } from './client-registry.js';
@@ -49,7 +52,17 @@ export async function handleSpawnSession(
   }
 
   try {
-    const session = await sessionManager.spawnSession(cwd);
+    const session = await sessionManager.spawnSession({
+      cwd,
+      name: msg.name,
+      permissionMode: msg.permissionMode,
+      model: msg.model,
+      effortLevel: msg.effortLevel,
+      outputStyle: msg.outputStyle,
+      worktree: msg.worktree,
+      resumeSessionId: msg.resumeSessionId,
+      agent: msg.agent,
+    });
     const reply: ServerMessage = {
       type: 'SPAWN_RESULT',
       requestId: msg.requestId,
