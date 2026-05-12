@@ -24,6 +24,7 @@ import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { UserBubble } from './UserBubble';
 import { AssistantMessage } from './AssistantMessage';
+import { ThinkingCard } from './ThinkingCard';
 
 interface MessageListProps {
   sessionId: string;
@@ -36,7 +37,13 @@ function renderEntry({ item }: ListRenderItemInfo<ChatEntry>): React.ReactElemen
     case 'assistant':
       return <AssistantMessage text={item.text} streaming={item.streaming} />;
     case 'thinking':
-      return <ThinkingPlaceholder text={item.text} streaming={item.streaming} />;
+      return (
+        <ThinkingCard
+          text={item.text}
+          streaming={item.streaming}
+          timestamp={item.timestamp}
+        />
+      );
     case 'tool':
       return <ToolPlaceholder toolName={item.toolName} state={item.state} />;
     case 'permission_request':
@@ -126,25 +133,6 @@ export const MessageList = memo(MessageListBase);
 // card lands in later features (F7 ThinkingCard, F9..F20 tool cards, F19
 // QuestionCard, F20 PlanCard, F28 rate-limit banner). Keeps data visible
 // during the interim ship without re-writing MessageList each time.
-
-function ThinkingPlaceholder({
-  text,
-  streaming,
-}: {
-  text: string;
-  streaming: boolean;
-}): React.ReactElement {
-  return (
-    <View style={styles.info}>
-      <Text style={styles.infoLabel}>
-        {streaming ? 'Thinking…' : 'Thought'}
-      </Text>
-      <Text style={styles.infoText} numberOfLines={2}>
-        {text}
-      </Text>
-    </View>
-  );
-}
 
 function ToolPlaceholder({
   toolName,
