@@ -23,6 +23,7 @@ import { useConnectionStore, type ConnectionStatus } from '../../stores/connecti
 import { wsClient } from '../../services/ws-client';
 import { TabBar } from '../../components/sessions/TabBar';
 import { NewSessionSheet } from '../../components/sessions/NewSessionSheet';
+import { SessionHeader } from '../../components/chat/SessionHeader';
 
 // ── Offline-too-long banner ───────────────────
 //
@@ -186,6 +187,9 @@ export default function TerminalLayout(): React.ReactElement {
         onCloseSession={handleCloseSession}
         onAddSession={handleAddSession}
       />
+
+      {/* Per-session metadata */}
+      <SessionHeader sessionId={activeSessionId} />
 
       {/* Session content */}
       <View style={styles.content}>
