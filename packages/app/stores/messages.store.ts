@@ -155,10 +155,10 @@ function clamp(entries: ChatEntry[]): ChatEntry[] {
 function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
   switch (event.kind) {
     case 'assistant_text_delta': {
-      const last = findOpenAssistant(buf.entries, event.messageId);
-      if (last) {
-        last.text += event.text;
-        last.streaming = true;
+      const idx = findOpenAssistantIdx(buf.entries, event.messageId);
+      if (idx >= 0) {
+        const prev = buf.entries[idx] as ChatEntryAssistant;
+        buf.entries[idx] = { ...prev, text: prev.text + event.text, streaming: true };
         return;
       }
       buf.entries.push({
@@ -176,12 +176,11 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       // events tagged with the envelope `uuid` while `assistant`/`message_start`
       // carries the canonical `msg_…` id — they never match. Fall back to the
       // most recent streaming assistant entry and reconcile its messageId.
-      const exact = findAssistant(buf.entries, event.messageId);
-      const target = exact ?? findLastStreamingAssistant(buf.entries);
-      if (target) {
-        target.text = event.fullText;
-        target.streaming = false;
-        target.messageId = event.messageId;
+      const exactIdx = findAssistantIdx(buf.entries, event.messageId);
+      const idx = exactIdx >= 0 ? exactIdx : findLastStreamingAssistantIdx(buf.entries);
+      if (idx >= 0) {
+        const prev = buf.entries[idx] as ChatEntryAssistant;
+        buf.entries[idx] = { ...prev, text: event.fullText, streaming: false, messageId: event.messageId };
       } else {
         buf.entries.push({
           kind: 'assistant',
@@ -195,10 +194,10 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'thinking_delta': {
-      const last = findOpenThinking(buf.entries, event.messageId);
-      if (last) {
-        last.text += event.text;
-        last.streaming = true;
+      const idx = findOpenThinkingIdx(buf.entries, event.messageId);
+      if (idx >= 0) {
+        const prev = buf.entries[idx] as ChatEntryThinking;
+        buf.entries[idx] = { ...prev, text: prev.text + event.text, streaming: true };
         return;
       }
       buf.entries.push({
@@ -212,14 +211,11 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'thinking_done': {
-      // Same delta/done messageId mismatch as assistant — fall back to the
-      // most recent streaming thinking entry if there's no exact match.
-      const exact = findThinking(buf.entries, event.messageId);
-      const target = exact ?? findLastStreamingThinking(buf.entries);
-      if (target) {
-        target.text = event.fullText;
-        target.streaming = false;
-        target.messageId = event.messageId;
+      const exactIdx = findThinkingIdx(buf.entries, event.messageId);
+      const idx = exactIdx >= 0 ? exactIdx : findLastStreamingThinkingIdx(buf.entries);
+      if (idx >= 0) {
+        const prev = buf.entries[idx] as ChatEntryThinking;
+        buf.entries[idx] = { ...prev, text: event.fullText, streaming: false, messageId: event.messageId };
       } else {
         buf.entries.push({
           kind: 'thinking',
@@ -246,11 +242,15 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'tool_result': {
-      const tool = findToolByUseId(buf.entries, event.toolUseId);
-      if (tool) {
-        tool.state = event.isError ? 'error' : 'complete';
-        tool.result = event.content;
-        tool.structured = event.structured;
+      const idx = findToolIdxByUseId(buf.entries, event.toolUseId);
+      if (idx >= 0) {
+        const prev = buf.entries[idx] as ChatEntryTool;
+        buf.entries[idx] = {
+          ...prev,
+          state: event.isError ? 'error' : 'complete',
+          result: event.content,
+          structured: event.structured,
+        };
       }
       return;
     }
@@ -269,8 +269,11 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'permission_denied': {
-      const req = findPermRequestByToolUseId(buf.entries, event.toolUseId);
-      if (req) req.resolved = 'denied';
+      const idx = findPermRequestIdxByToolUseId(buf.entries, event.toolUseId);
+      if (idx >= 0) {
+        const prev = buf.entries[idx] as ChatEntryPermissionRequest;
+        buf.entries[idx] = { ...prev, resolved: 'denied' };
+      }
       return;
     }
     case 'turn_complete': {
@@ -321,98 +324,72 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
 // streaming hot path appends to the most recent assistant/thinking entry,
 // so these terminate immediately under normal flow.
 
-function findOpenAssistant(
-  entries: ChatEntry[],
-  messageId: string
-): ChatEntryAssistant | null {
+function findOpenAssistantIdx(entries: ChatEntry[], messageId: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'assistant' && e.messageId === messageId && e.streaming) {
-      return e;
-    }
-    if (e.kind === 'assistant' || e.kind === 'thinking') return null;
+    if (e.kind === 'assistant' && e.messageId === messageId && e.streaming) return i;
+    if (e.kind === 'assistant' || e.kind === 'thinking') return -1;
   }
-  return null;
+  return -1;
 }
 
-function findAssistant(
-  entries: ChatEntry[],
-  messageId: string
-): ChatEntryAssistant | null {
+function findAssistantIdx(entries: ChatEntry[], messageId: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'assistant' && e.messageId === messageId) return e;
+    if (e.kind === 'assistant' && e.messageId === messageId) return i;
   }
-  return null;
+  return -1;
 }
 
-function findOpenThinking(
-  entries: ChatEntry[],
-  messageId: string
-): ChatEntryThinking | null {
+function findOpenThinkingIdx(entries: ChatEntry[], messageId: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'thinking' && e.messageId === messageId && e.streaming) {
-      return e;
-    }
-    if (e.kind === 'assistant' || e.kind === 'thinking') return null;
+    if (e.kind === 'thinking' && e.messageId === messageId && e.streaming) return i;
+    if (e.kind === 'assistant' || e.kind === 'thinking') return -1;
   }
-  return null;
+  return -1;
 }
 
-function findThinking(
-  entries: ChatEntry[],
-  messageId: string
-): ChatEntryThinking | null {
+function findThinkingIdx(entries: ChatEntry[], messageId: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'thinking' && e.messageId === messageId) return e;
+    if (e.kind === 'thinking' && e.messageId === messageId) return i;
   }
-  return null;
+  return -1;
 }
 
-function findLastStreamingAssistant(
-  entries: ChatEntry[]
-): ChatEntryAssistant | null {
+function findLastStreamingAssistantIdx(entries: ChatEntry[]): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'assistant' && e.streaming) return e;
-    if (e.kind === 'assistant' || e.kind === 'thinking') return null;
+    if (e.kind === 'assistant' && e.streaming) return i;
+    if (e.kind === 'assistant' || e.kind === 'thinking') return -1;
   }
-  return null;
+  return -1;
 }
 
-function findLastStreamingThinking(
-  entries: ChatEntry[]
-): ChatEntryThinking | null {
+function findLastStreamingThinkingIdx(entries: ChatEntry[]): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'thinking' && e.streaming) return e;
-    if (e.kind === 'assistant' || e.kind === 'thinking') return null;
+    if (e.kind === 'thinking' && e.streaming) return i;
+    if (e.kind === 'assistant' || e.kind === 'thinking') return -1;
   }
-  return null;
+  return -1;
 }
 
-function findToolByUseId(
-  entries: ChatEntry[],
-  toolUseId: string
-): ChatEntryTool | null {
+function findToolIdxByUseId(entries: ChatEntry[], toolUseId: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'tool' && e.toolUseId === toolUseId) return e;
+    if (e.kind === 'tool' && e.toolUseId === toolUseId) return i;
   }
-  return null;
+  return -1;
 }
 
-function findPermRequestByToolUseId(
-  entries: ChatEntry[],
-  toolUseId: string
-): ChatEntryPermissionRequest | null {
+function findPermRequestIdxByToolUseId(entries: ChatEntry[], toolUseId: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === 'permission_request' && e.toolUseId === toolUseId) return e;
+    if (e.kind === 'permission_request' && e.toolUseId === toolUseId) return i;
   }
-  return null;
+  return -1;
 }
 
 // ──────────────────────────────────────────────
