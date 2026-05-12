@@ -236,4 +236,6 @@ export type ServerMessage =
 
 export * from './session-events.js';
 export * from './control-messages.js';
+export * from './claude-stream.js';
+/** Namespace alias kept for app-side consumers that prefer the prefix. */
 export * as ClaudeStream from './claude-stream.js';

@@ -1,18 +1,21 @@
 {
   "name": "walccyd",
-  "version": "1.0.0",
+  "version": "2.0.0-alpha.1",
   "private": true,
+  "type": "module",
   "bin": {
     "walccy": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format cjs --dts",
+    "build": "tsup src/index.ts --format esm --dts",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.138",
     "@walccy/protocol": "*",
     "commander": "^12.1.0",
     "node-pty": "^1.0.0",
