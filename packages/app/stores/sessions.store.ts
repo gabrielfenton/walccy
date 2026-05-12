@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { useOutputStore } from './output.store';
+import { useMessagesStore } from './messages.store';
 import type { Session } from '@walccy/protocol';
 
 interface SessionsStore {
@@ -36,8 +36,8 @@ export const useSessionsStore = create<SessionsStore>((set) => ({
     }),
 
   removeSession: (id) => {
-    // Also clean up the output buffer for this session
-    useOutputStore.getState().clearBuffer(id);
+    // Also clean up the messages buffer for this session
+    useMessagesStore.getState().clear(id);
     set((state) => {
       const next = { ...state.sessions };
       delete next[id];

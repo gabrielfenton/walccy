@@ -1,15 +1,17 @@
 // ──────────────────────────────────────────────
 // Walccy — WebSocket client service
-// Thin orchestrator over modular collaborators (PendingRequests,
-// ReconnectController, PingWatchdog, PowerPolicy). Public API is
-// stable — see grep('wsClient.') for call sites.
 // ──────────────────────────────────────────────
+//
+// v2 stream-json era. Consumes typed SessionEvent broadcasts from the
+// daemon, dispatches them into messages.store. Sends ControlMessage
+// envelopes for the user input / interrupt / plan-accept / etc. control
+// plane.
 
 import { MMKV } from 'react-native-mmkv';
 import { v4 as uuid } from 'uuid';
 import { connectionStore } from '../stores/connection.store';
 import { sessionsStore } from '../stores/sessions.store';
-import { outputStore } from '../stores/output.store';
+import { messagesStore } from '../stores/messages.store';
 import {
   WS_RECONNECT_DELAYS,
   WS_RECONNECT_JITTER,
@@ -22,7 +24,16 @@ import { foregroundService } from './foreground-service';
 import { settingsStore } from '../stores/settings.store';
 import { scheduleLocalNotification } from './notification.service';
 import { getPushToken } from './push-token';
-import type { ServerMessage, DirectoryEntry } from '@walccy/protocol';
+import type {
+  ServerMessage,
+  ClientMessage,
+  ControlMessage,
+  DirectoryEntry,
+  UserContentBlock,
+  PermissionMode,
+  EffortLevel,
+  SpawnSessionMessage,
+} from '@walccy/protocol';
 import { PendingRequests } from './ws/PendingRequests';
 import { ReconnectController } from './ws/ReconnectController';
 import { PingWatchdog } from './ws/PingWatchdog';
@@ -44,6 +55,15 @@ const DIRECTORY_LIST_KEY = 'directory-list';
 const RECONNECT_MAX_ATTEMPTS = 12;
 
 // ──────────────────────────────────────────────
+// Spawn parameters surfaced to the UI
+// ──────────────────────────────────────────────
+
+export type SpawnSessionParams = Omit<
+  SpawnSessionMessage,
+  'type' | 'requestId' | 'cwd'
+>;
+
+// ──────────────────────────────────────────────
 // WsClient
 // ──────────────────────────────────────────────
 
@@ -59,13 +79,12 @@ class WsClient {
   private currentPort: number | null = null;
   private currentSecret: string | null = null;
 
-  /** Sessions we should be subscribed to (survives reconnects). Value unused. */
-  private activeSubscriptions: Map<string, number | undefined> = new Map();
+  /** Sessions we should be subscribed to (survives reconnects). */
+  private activeSubscriptions: Set<string> = new Set();
 
-  /** Highest line index we've delivered to the buffer per session. */
-  private lastSeenIndex: Map<string, number> = new Map();
+  /** Highest event index we've applied per session (for resume gap-fill). */
+  private lastEventIndex: Map<string, number> = new Map();
 
-  /** Last successfully registered FCM token, for debounce. */
   private lastFcmTokenRegistered: string | null = null;
 
   private pendingSpawns = new PendingRequests<string>();
@@ -75,7 +94,6 @@ class WsClient {
   private ping: PingWatchdog;
   private power: PowerPolicy;
 
-  /** Listeners registered via onMessage() */
   private messageListeners: Set<(msg: ServerMessage) => void> = new Set();
 
   constructor() {
@@ -116,10 +134,6 @@ class WsClient {
     });
   }
 
-  /**
-   * Register a listener for all incoming ServerMessages.
-   * Returns an unsubscribe function — call it in useEffect cleanup.
-   */
   onMessage(listener: (msg: ServerMessage) => void): () => void {
     this.messageListeners.add(listener);
     return () => this.messageListeners.delete(listener);
@@ -148,17 +162,14 @@ class WsClient {
     this.ping.stop();
     this.clearAuthTimeout();
     this.activeSubscriptions.clear();
-    this.lastSeenIndex.clear();
+    this.lastEventIndex.clear();
     this.rejectAllPending(new Error('Disconnected'));
 
     this.closeSocketSilently();
-
     this.power.onDisconnect();
-
     connectionStore.getState().setDisconnected();
   }
 
-  /** Manual retry after the circuit-breaker has tripped. */
   retry(): void {
     if (!this.currentHost || !this.currentPort || !this.currentSecret) return;
     this.reconnect.reset();
@@ -166,43 +177,98 @@ class WsClient {
     this.openSocket();
   }
 
-  sendInput(sessionId: string, data: string): void {
-    this.send({ type: 'INPUT', sessionId, data });
-  }
+  // ── Subscription ──────────────────────────────
 
-  subscribe(sessionId: string, fromLine?: number): void {
-    this.activeSubscriptions.set(sessionId, fromLine);
-    this.send({ type: 'SUBSCRIBE', sessionId, ...(fromLine !== undefined ? { fromLine } : {}) });
+  subscribe(sessionId: string): void {
+    this.activeSubscriptions.add(sessionId);
+    const cursor = this.lastEventIndex.get(sessionId);
+    const fromEventIndex = cursor !== undefined ? cursor + 1 : 0;
+    this.send({ type: 'SUBSCRIBE', sessionId, fromEventIndex });
   }
 
   unsubscribe(sessionId: string): void {
     this.activeSubscriptions.delete(sessionId);
-    this.lastSeenIndex.delete(sessionId);
+    this.lastEventIndex.delete(sessionId);
     this.send({ type: 'UNSUBSCRIBE', sessionId });
   }
 
-  /**
-   * Ask the daemon to kill a session.  Local store cleanup happens when the
-   * resulting SESSION_REMOVED broadcast arrives — we just unsubscribe locally
-   * so we stop hearing about it in the interim.
-   */
-  killSession(sessionId: string): void {
-    this.activeSubscriptions.delete(sessionId);
-    this.lastSeenIndex.delete(sessionId);
-    this.send({ type: 'KILL_SESSION', sessionId });
+  // ── Control plane (CONTROL_MESSAGE envelope) ──
+
+  sendUserMessage(sessionId: string, content: UserContentBlock[]): void {
+    messagesStore.getState().pushUserMessage(sessionId, content);
+    this.sendControl(sessionId, { type: 'send_user_message', content });
   }
 
-  sendResize(sessionId: string, cols: number, rows: number): void {
-    this.send({ type: 'RESIZE', sessionId, cols, rows });
+  /** Convenience: send a plain text turn from the composer. */
+  sendUserText(sessionId: string, text: string): void {
+    this.sendUserMessage(sessionId, [{ type: 'text', text }]);
   }
+
+  interrupt(sessionId: string): void {
+    this.sendControl(sessionId, { type: 'interrupt' });
+  }
+
+  killSession(sessionId: string): void {
+    this.activeSubscriptions.delete(sessionId);
+    this.lastEventIndex.delete(sessionId);
+    this.sendControl(sessionId, { type: 'kill_session', sessionId });
+  }
+
+  planAccept(sessionId: string, toolUseId: string): void {
+    this.sendControl(sessionId, { type: 'plan_accept', toolUseId });
+  }
+
+  planReject(sessionId: string, toolUseId: string, reason?: string): void {
+    this.sendControl(sessionId, { type: 'plan_reject', toolUseId, reason });
+  }
+
+  answerQuestion(
+    sessionId: string,
+    toolUseId: string,
+    answers: string[]
+  ): void {
+    this.sendControl(sessionId, { type: 'answer_question', toolUseId, answers });
+  }
+
+  resolvePermission(
+    sessionId: string,
+    requestId: string,
+    decision: 'allow' | 'deny',
+    updatedInput?: Record<string, unknown>
+  ): void {
+    messagesStore
+      .getState()
+      .markPermissionResolved(
+        sessionId,
+        requestId,
+        decision === 'allow' ? 'allowed' : 'denied'
+      );
+    this.sendControl(sessionId, {
+      type: 'resolve_permission',
+      requestId,
+      decision,
+      updatedInput,
+    });
+  }
+
+  changePermissionMode(sessionId: string, mode: PermissionMode): void {
+    this.sendControl(sessionId, { type: 'change_permission_mode', mode });
+  }
+
+  setModel(sessionId: string, model?: string): void {
+    this.sendControl(sessionId, { type: 'set_model', model });
+  }
+
+  setEffortLevel(sessionId: string, level: EffortLevel): void {
+    this.sendControl(sessionId, { type: 'set_effort_level', level });
+  }
+
+  // ── Misc ──────────────────────────────────────
 
   listSessions(): void {
     this.send({ type: 'LIST_SESSIONS' });
   }
 
-  /**
-   * Sync foreground-service state with the user's low-power-mode toggle.
-   */
   applyLowPowerMode(_lowPowerMode: boolean): void {
     const connected =
       this.currentHost && this.currentPort
@@ -212,7 +278,6 @@ class WsClient {
   }
 
   listDirectories(query?: string, timeoutMs = 8000): Promise<DirectoryEntry[]> {
-    // Single-flight: cancel any prior request before issuing the new one.
     this.pendingDirectoryListing.rejectAll(
       new Error('Superseded by newer listDirectories')
     );
@@ -224,17 +289,25 @@ class WsClient {
     return promise;
   }
 
-  spawnSession(cwd: string, timeoutMs = 15000): Promise<string> {
+  spawnSession(
+    cwd: string,
+    params: SpawnSessionParams = {},
+    timeoutMs = 15000
+  ): Promise<string> {
     const requestId = uuid();
     const { promise } = this.pendingSpawns.send<string>({
       requestId,
       timeoutMs,
     });
-    this.send({ type: 'SPAWN_SESSION', cwd, requestId });
+    this.send({ type: 'SPAWN_SESSION', cwd, requestId, ...params });
     return promise;
   }
 
   // ── Private helpers ───────────────────────────
+
+  private sendControl(sessionId: string, message: ControlMessage): void {
+    this.send({ type: 'CONTROL_MESSAGE', sessionId, message });
+  }
 
   private closeSocketSilently(): void {
     if (this.ws) {
@@ -248,7 +321,6 @@ class WsClient {
   private openSocket(): void {
     if (!this.currentHost || !this.currentPort || !this.currentSecret) return;
 
-    // Always start fresh: any prior auth timer or socket is stale.
     this.clearAuthTimeout();
 
     const url = `ws://${this.currentHost}:${this.currentPort}`;
@@ -278,7 +350,7 @@ class WsClient {
       };
 
       ws.onerror = (_err: Event) => {
-        // onerror is always followed by onclose — let onclose handle reconnect
+        // onerror is always followed by onclose
       };
 
       ws.onclose = () => {
@@ -304,9 +376,7 @@ class WsClient {
     }
 
     for (const listener of Array.from(this.messageListeners)) {
-      try {
-        listener(msg);
-      } catch (err) {
+      try { listener(msg); } catch (err) {
         console.warn('[WsClient] Message listener error:', err);
       }
     }
@@ -323,17 +393,9 @@ class WsClient {
         );
         this.ping.start();
         this.listSessions();
-        // Re-subscribe using the index cursor so the daemon ships only the
-        // gap (RESUME) instead of replacing scrollback (HISTORY).
-        for (const sessionId of Array.from(this.activeSubscriptions.keys())) {
-          const cursor = this.lastSeenIndex.get(sessionId);
-          const fromLine = cursor !== undefined ? cursor + 1 : undefined;
-          this.activeSubscriptions.set(sessionId, fromLine);
-          this.send({
-            type: 'SUBSCRIBE',
-            sessionId,
-            ...(fromLine !== undefined ? { fromLine } : {}),
-          });
+        // Re-subscribe (resumes from lastEventIndex+1).
+        for (const sessionId of Array.from(this.activeSubscriptions)) {
+          this.subscribe(sessionId);
         }
         this.registerPushToken();
         break;
@@ -369,7 +431,7 @@ class WsClient {
             const name = prev.name || 'Claude';
             scheduleLocalNotification(
               `${name} needs input`,
-              'Claude has finished its task and is waiting for your response.'
+              'Claude is waiting for your response.'
             ).catch(() => {});
           }
         }
@@ -379,34 +441,36 @@ class WsClient {
 
       case 'SESSION_REMOVED': {
         sessionsStore.getState().removeSession(msg.sessionId);
+        messagesStore.getState().clear(msg.sessionId);
+        this.lastEventIndex.delete(msg.sessionId);
         break;
       }
 
       case 'HISTORY': {
-        outputStore.getState().setHistory(msg.sessionId, msg.lines, msg.totalLines);
-        this.bumpLastSeen(msg.sessionId, msg.lines);
-        // Detect scrollback truncation.
-        const requestedFrom = this.activeSubscriptions.get(msg.sessionId);
-        if (
-          typeof requestedFrom === 'number' &&
-          requestedFrom > 0 &&
-          msg.firstAvailableLine > requestedFrom
-        ) {
-          const dropped = msg.firstAvailableLine - requestedFrom;
-          outputStore.getState().insertGapMarker(msg.sessionId, dropped, msg.firstAvailableLine);
+        messagesStore.getState().setHistory(
+          msg.sessionId,
+          msg.events,
+          msg.totalEvents,
+          msg.firstAvailableEventIndex
+        );
+        // History events came from the ring buffer (which is index-tracked
+        // on the daemon side). The HISTORY envelope doesn't carry per-event
+        // indices, so we trust the daemon's totalEvents - 1 as the highest
+        // index we've now seen.
+        if (msg.totalEvents > 0) {
+          this.lastEventIndex.set(msg.sessionId, msg.totalEvents - 1);
         }
         break;
       }
 
-      case 'RESUME': {
-        outputStore.getState().appendResume(msg.sessionId, msg.lines, msg.totalLines);
-        this.bumpLastSeen(msg.sessionId, msg.lines);
-        break;
-      }
-
-      case 'OUTPUT': {
-        outputStore.getState().appendLines(msg.sessionId, msg.lines);
-        this.bumpLastSeen(msg.sessionId, msg.lines);
+      case 'SESSION_EVENT': {
+        messagesStore
+          .getState()
+          .applyEvent(msg.sessionId, msg.event, msg.eventIndex);
+        const prev = this.lastEventIndex.get(msg.sessionId) ?? -1;
+        if (msg.eventIndex > prev) {
+          this.lastEventIndex.set(msg.sessionId, msg.eventIndex);
+        }
         break;
       }
 
@@ -414,10 +478,6 @@ class WsClient {
         const latency = Date.now() - this.pingSentAt;
         connectionStore.getState().setLatency(latency);
         this.ping.notePongReceived(latency);
-        break;
-      }
-
-      case 'INPUT_LOCK': {
         break;
       }
 
@@ -445,15 +505,6 @@ class WsClient {
         console.warn('[WsClient] Unknown message type:', _exhaustive);
       }
     }
-  }
-
-  private bumpLastSeen(sessionId: string, lines: { index: number }[]): void {
-    if (lines.length === 0) return;
-    let max = this.lastSeenIndex.get(sessionId) ?? -1;
-    for (const l of lines) {
-      if (l.index > max) max = l.index;
-    }
-    this.lastSeenIndex.set(sessionId, max);
   }
 
   private registerPushToken(): void {
@@ -486,9 +537,8 @@ class WsClient {
     }
   }
 
-  private send(msg: object): void {
+  private send(msg: ClientMessage): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      // Drop silently — the reconnect cycle will handle it
       return;
     }
     try {
@@ -498,9 +548,5 @@ class WsClient {
     }
   }
 }
-
-// ──────────────────────────────────────────────
-// Singleton export
-// ──────────────────────────────────────────────
 
 export const wsClient = new WsClient();
