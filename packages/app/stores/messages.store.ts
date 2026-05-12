@@ -172,10 +172,16 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'assistant_text_done': {
-      const last = findAssistant(buf.entries, event.messageId);
-      if (last) {
-        last.text = event.fullText;
-        last.streaming = false;
+      // Prefer exact messageId match, but the SDK streams `content_block_delta`
+      // events tagged with the envelope `uuid` while `assistant`/`message_start`
+      // carries the canonical `msg_…` id — they never match. Fall back to the
+      // most recent streaming assistant entry and reconcile its messageId.
+      const exact = findAssistant(buf.entries, event.messageId);
+      const target = exact ?? findLastStreamingAssistant(buf.entries);
+      if (target) {
+        target.text = event.fullText;
+        target.streaming = false;
+        target.messageId = event.messageId;
       } else {
         buf.entries.push({
           kind: 'assistant',
@@ -206,10 +212,14 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'thinking_done': {
-      const last = findThinking(buf.entries, event.messageId);
-      if (last) {
-        last.text = event.fullText;
-        last.streaming = false;
+      // Same delta/done messageId mismatch as assistant — fall back to the
+      // most recent streaming thinking entry if there's no exact match.
+      const exact = findThinking(buf.entries, event.messageId);
+      const target = exact ?? findLastStreamingThinking(buf.entries);
+      if (target) {
+        target.text = event.fullText;
+        target.streaming = false;
+        target.messageId = event.messageId;
       } else {
         buf.entries.push({
           kind: 'thinking',
@@ -357,6 +367,28 @@ function findThinking(
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
     if (e.kind === 'thinking' && e.messageId === messageId) return e;
+  }
+  return null;
+}
+
+function findLastStreamingAssistant(
+  entries: ChatEntry[]
+): ChatEntryAssistant | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (e.kind === 'assistant' && e.streaming) return e;
+    if (e.kind === 'assistant' || e.kind === 'thinking') return null;
+  }
+  return null;
+}
+
+function findLastStreamingThinking(
+  entries: ChatEntry[]
+): ChatEntryThinking | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (e.kind === 'thinking' && e.streaming) return e;
+    if (e.kind === 'assistant' || e.kind === 'thinking') return null;
   }
   return null;
 }
