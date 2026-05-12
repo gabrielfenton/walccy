@@ -25,6 +25,7 @@ import { FontFamily, FontSize } from '../../constants/typography';
 import { UserBubble } from './UserBubble';
 import { AssistantMessage } from './AssistantMessage';
 import { ThinkingCard } from './ThinkingCard';
+import { renderToolCard } from './tools/tool-card-registry';
 
 interface MessageListProps {
   sessionId: string;
@@ -45,7 +46,7 @@ function renderEntry({ item }: ListRenderItemInfo<ChatEntry>): React.ReactElemen
         />
       );
     case 'tool':
-      return <ToolPlaceholder toolName={item.toolName} state={item.state} />;
+      return renderToolCard(item);
     case 'permission_request':
       return <PermissionPlaceholder toolName={item.toolName} />;
     case 'turn_summary':
@@ -133,23 +134,6 @@ export const MessageList = memo(MessageListBase);
 // card lands in later features (F7 ThinkingCard, F9..F20 tool cards, F19
 // QuestionCard, F20 PlanCard, F28 rate-limit banner). Keeps data visible
 // during the interim ship without re-writing MessageList each time.
-
-function ToolPlaceholder({
-  toolName,
-  state,
-}: {
-  toolName: string;
-  state: 'running' | 'complete' | 'error';
-}): React.ReactElement {
-  const statusGlyph = state === 'running' ? '▶' : state === 'error' ? '✗' : '✓';
-  return (
-    <View style={styles.info}>
-      <Text style={styles.infoLabel}>
-        {statusGlyph} Tool · {toolName}
-      </Text>
-    </View>
-  );
-}
 
 function PermissionPlaceholder({ toolName }: { toolName: string }): React.ReactElement {
   return (
