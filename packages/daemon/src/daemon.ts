@@ -18,7 +18,11 @@ export class Daemon {
     logger.info('Walccy daemon starting…');
 
     let bindAddress: string;
-    if (process.env['WALCCY_DEV_MODE'] === '1') {
+    const override = process.env['WALCCY_BIND_ADDRESS'];
+    if (override) {
+      bindAddress = override;
+      logger.info(`Binding to WALCCY_BIND_ADDRESS=${override}`);
+    } else if (process.env['WALCCY_DEV_MODE'] === '1') {
       bindAddress = '127.0.0.1';
       logger.info('Dev mode: binding to 127.0.0.1');
     } else {

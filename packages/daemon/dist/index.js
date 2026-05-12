@@ -967,7 +967,6 @@ var Session = class extends EventEmitter2 {
       this._onEvent(errorEvent);
     });
     await this.driver.start();
-    this._info.status = "active";
   }
   /**
    * Send the user's next turn. `content` is multipart text+image content
@@ -2563,7 +2562,11 @@ var Daemon = class {
     setLogLevel(this.config.logLevel);
     logger_default.info("Walccy daemon starting\u2026");
     let bindAddress;
-    if (process.env["WALCCY_DEV_MODE"] === "1") {
+    const override = process.env["WALCCY_BIND_ADDRESS"];
+    if (override) {
+      bindAddress = override;
+      logger_default.info(`Binding to WALCCY_BIND_ADDRESS=${override}`);
+    } else if (process.env["WALCCY_DEV_MODE"] === "1") {
       bindAddress = "127.0.0.1";
       logger_default.info("Dev mode: binding to 127.0.0.1");
     } else {

@@ -134,7 +134,9 @@ export class Session extends EventEmitter {
     });
 
     await this.driver.start();
-    this._info.status = 'active';
+    // Status stays 'idle' until the first `status: 'requesting'` event from
+    // the SDK; without this the Composer would show its stop button before
+    // any turn has even been requested.
   }
 
   /**
