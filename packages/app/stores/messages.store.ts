@@ -155,7 +155,11 @@ function clamp(entries: ChatEntry[]): ChatEntry[] {
 function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
   switch (event.kind) {
     case 'assistant_text_delta': {
-      const idx = findOpenAssistantIdx(buf.entries, event.messageId);
+      // The SDK tags every `stream_event` envelope with a unique uuid, so
+      // delta messageIds differ within one logical message. Coalesce by
+      // "most-recent-streaming assistant entry" rather than messageId match
+      // — same heuristic the done case uses to reconcile.
+      const idx = findLastStreamingAssistantIdx(buf.entries);
       if (idx >= 0) {
         const prev = buf.entries[idx] as ChatEntryAssistant;
         buf.entries[idx] = { ...prev, text: prev.text + event.text, streaming: true };
@@ -194,7 +198,9 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'thinking_delta': {
-      const idx = findOpenThinkingIdx(buf.entries, event.messageId);
+      // Same delta-uuid-churn issue as assistant_text_delta — coalesce by
+      // most-recent-streaming thinking entry, not by messageId.
+      const idx = findLastStreamingThinkingIdx(buf.entries);
       if (idx >= 0) {
         const prev = buf.entries[idx] as ChatEntryThinking;
         buf.entries[idx] = { ...prev, text: prev.text + event.text, streaming: true };
@@ -324,28 +330,10 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
 // streaming hot path appends to the most recent assistant/thinking entry,
 // so these terminate immediately under normal flow.
 
-function findOpenAssistantIdx(entries: ChatEntry[], messageId: string): number {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
-    if (e.kind === 'assistant' && e.messageId === messageId && e.streaming) return i;
-    if (e.kind === 'assistant' || e.kind === 'thinking') return -1;
-  }
-  return -1;
-}
-
 function findAssistantIdx(entries: ChatEntry[], messageId: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
     if (e.kind === 'assistant' && e.messageId === messageId) return i;
-  }
-  return -1;
-}
-
-function findOpenThinkingIdx(entries: ChatEntry[], messageId: string): number {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
-    if (e.kind === 'thinking' && e.messageId === messageId && e.streaming) return i;
-    if (e.kind === 'assistant' || e.kind === 'thinking') return -1;
   }
   return -1;
 }
