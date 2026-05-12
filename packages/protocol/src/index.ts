@@ -1,4 +1,17 @@
 // ──────────────────────────────────────────────
+// @walccy/protocol — v2 stream-json/SDK era
+// ──────────────────────────────────────────────
+//
+// Breaking change vs v1: lines are gone. Daemon emits typed `SessionEvent`s
+// sourced from the Claude Agent SDK; app sends `ControlMessage`s back through
+// a unified envelope. See docs/stream-json-migration.md +
+// docs/stream-json-spike-addendum.md.
+
+import type { PermissionMode, EffortLevel } from './claude-stream.js';
+import type { ControlMessageEnvelope } from './control-messages.js';
+import type { SessionEventMessage } from './session-events.js';
+
+// ──────────────────────────────────────────────
 // Core domain types
 // ──────────────────────────────────────────────
 
@@ -12,19 +25,16 @@ export interface Session {
   status: SessionStatus;
   startedAt: number;
   lastActivityAt: number;
-  lineCount: number;
   waitingForInput: boolean;
   connectedClients: string[];
   owned: boolean;
-}
-
-export interface BufferedLine {
-  index: number;
-  content: string;       // ANSI stripped
-  rawContent: string;    // with ANSI codes
-  timestamp: number;
-  source: 'stdout' | 'stderr' | 'input';
-  inputClientId?: string;
+  model?: string;
+  permissionMode?: PermissionMode;
+  effortLevel?: EffortLevel;
+  /** Accumulated USD spent across all turns in this session. */
+  costSoFar?: number;
+  /** Highest event index currently in the daemon ring buffer. */
+  lastEventIndex?: number;
 }
 
 // ──────────────────────────────────────────────
@@ -40,34 +50,6 @@ export interface AuthMessage {
 
 export interface ListSessionsMessage {
   type: 'LIST_SESSIONS';
-}
-
-export interface SubscribeMessage {
-  type: 'SUBSCRIBE';
-  sessionId: string;
-  /**
-   * When provided, the daemon replies with `RESUME` (append-style gap-fill)
-   * instead of `HISTORY` (replace-style snapshot).
-   */
-  fromLine?: number;
-}
-
-export interface UnsubscribeMessage {
-  type: 'UNSUBSCRIBE';
-  sessionId: string;
-}
-
-export interface InputMessage {
-  type: 'INPUT';
-  sessionId: string;
-  data: string;
-}
-
-export interface ResizeMessage {
-  type: 'RESIZE';
-  sessionId: string;
-  cols: number;
-  rows: number;
 }
 
 export interface PingMessage {
@@ -86,25 +68,48 @@ export interface ListDirectoriesMessage {
   query?: string;
 }
 
+/**
+ * Spawn a new session. All fields beyond `cwd` + `requestId` are optional
+ * and map to SDK `Options` at spawn time.
+ */
 export interface SpawnSessionMessage {
   type: 'SPAWN_SESSION';
   /** Absolute working directory for the new session. */
   cwd: string;
   /** Client-generated correlation id, echoed back in SPAWN_RESULT. */
   requestId: string;
+  /** Optional explicit display name. */
+  name?: string;
+  /** Spawn-time permission mode. May be changed mid-session via control msg. */
+  permissionMode?: PermissionMode;
+  /** Model alias or full id. */
+  model?: string;
+  /** Effort level for the session. */
+  effortLevel?: EffortLevel;
+  /** Output style (default | concise | …). */
+  outputStyle?: string;
+  /** Worktree name; truthy enables `--worktree`. */
+  worktree?: string | boolean;
+  /** Resume a prior session id (e.g., after interrupt-respawn). */
+  resumeSessionId?: string;
+  /** Pick a built-in or settings-defined agent as the main thread. */
+  agent?: string;
 }
 
 /**
- * Terminate a session and remove it from the daemon's tracking.
- *
- * For all session modes the daemon will best-effort `SIGTERM` the recorded
- * pid (if > 0), tear down its own resources (pty / wrap socket / attach
- * stream), drop the session, and broadcast `SESSION_REMOVED`.  No response
- * is sent on success — clients observe the removal via the broadcast.
- * If the session id is unknown an `ERROR` (`SESSION_NOT_FOUND`) is sent.
+ * Subscribe to a session's event stream. `fromEventIndex` allows gap-fill on
+ * reconnect — the daemon replies with all events at index ≥ that value, or
+ * a snapshot if the ring buffer has wrapped past it (signalled via
+ * `firstAvailableEventIndex`).
  */
-export interface KillSessionMessage {
-  type: 'KILL_SESSION';
+export interface SubscribeMessage {
+  type: 'SUBSCRIBE';
+  sessionId: string;
+  fromEventIndex?: number;
+}
+
+export interface UnsubscribeMessage {
+  type: 'UNSUBSCRIBE';
   sessionId: string;
 }
 
@@ -113,13 +118,16 @@ export type ClientMessage =
   | ListSessionsMessage
   | SubscribeMessage
   | UnsubscribeMessage
-  | InputMessage
-  | ResizeMessage
   | PingMessage
   | RegisterPushTokenMessage
   | ListDirectoriesMessage
   | SpawnSessionMessage
-  | KillSessionMessage;
+  | ControlMessageEnvelope;
+
+// Note: session termination is delivered via `ControlMessage` of kind
+// `kill_session` wrapped in `ControlMessageEnvelope` — there is no separate
+// top-level KILL_SESSION wire message in v2. Clients observe via
+// SESSION_REMOVED on success or ERROR (`SESSION_NOT_FOUND`) on failure.
 
 // ──────────────────────────────────────────────
 // WebSocket message types  (Daemon → Client)
@@ -157,47 +165,17 @@ export interface SessionRemovedMessage {
   sessionId: string;
 }
 
+/**
+ * Snapshot of events resident in the daemon's ring buffer for a session.
+ * Sent in response to SUBSCRIBE. `firstAvailableEventIndex` lets clients
+ * detect ring-wrap gaps the same way the old `firstAvailableLine` worked.
+ */
 export interface HistoryMessage {
   type: 'HISTORY';
   sessionId: string;
-  lines: BufferedLine[];
-  totalLines: number;
-  /**
-   * Lowest line index still present in the daemon's ring buffer for this
-   * session at the moment of the response. Clients compare this against the
-   * `fromLine` they requested to detect scrollback truncation:
-   *  - `firstAvailableLine <= fromLine` → no gap; all requested lines were
-   *    available and have been delivered.
-   *  - `firstAvailableLine >  fromLine` → the buffer wrapped past the
-   *    requested cursor while the client was disconnected; exactly
-   *    `firstAvailableLine - fromLine` lines were dropped between the
-   *    requested point and the contiguous tail returned in `lines`.
-   * For empty buffers this is 0.
-   */
-  firstAvailableLine: number;
-}
-
-export interface ResumeMessage {
-  type: 'RESUME';
-  sessionId: string;
-  /** Lines with index >= the SUBSCRIBE.fromLine the client supplied. */
-  lines: BufferedLine[];
-  /** Daemon's current totalLinesReceived after these lines. */
-  totalLines: number;
-}
-
-export interface OutputMessage {
-  type: 'OUTPUT';
-  sessionId: string;
-  lines: BufferedLine[];
-}
-
-export interface InputLockMessage {
-  type: 'INPUT_LOCK';
-  sessionId: string;
-  lockedByClientId: string;
-  lockedByClientName: string;
-  expiresAt: number;
+  events: import('./session-events.js').SessionEvent[];
+  totalEvents: number;
+  firstAvailableEventIndex: number;
 }
 
 export interface PongMessage {
@@ -246,10 +224,16 @@ export type ServerMessage =
   | SessionUpdatedMessage
   | SessionRemovedMessage
   | HistoryMessage
-  | ResumeMessage
-  | OutputMessage
-  | InputLockMessage
+  | SessionEventMessage
   | PongMessage
   | ErrorMessage
   | DirectoryListMessage
   | SpawnResultMessage;
+
+// ──────────────────────────────────────────────
+// Re-exports
+// ──────────────────────────────────────────────
+
+export * from './session-events.js';
+export * from './control-messages.js';
+export * as ClaudeStream from './claude-stream.js';
