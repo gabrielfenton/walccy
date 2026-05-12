@@ -20,9 +20,7 @@ import { wsClient } from '../../services/ws-client';
 import { clipboardService } from '../../services/clipboard.service';
 import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import { MessageList } from '../../components/chat/MessageList';
-import { ControlBar } from '../../components/terminal/ControlBar';
-import { InputBar } from '../../components/terminal/InputBar';
-import { InputLockBanner } from '../../components/terminal/InputLockBanner';
+import { Composer } from '../../components/chat/Composer';
 import { ClipboardPopup } from '../../components/clipboard/ClipboardPopup';
 import { ClipboardBubble } from '../../components/clipboard/ClipboardBubble';
 import { ClipboardHistorySheet } from '../../components/clipboard/ClipboardHistorySheet';
@@ -31,15 +29,6 @@ import { TextInputModal } from '../../components/ui/TextInputModal';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { useSettingsStore } from '../../stores/settings.store';
-
-// ──────────────────────────────────────────────
-// Types
-// ──────────────────────────────────────────────
-
-interface InputLockState {
-  active: boolean;
-  clientName: string;
-}
 
 // ──────────────────────────────────────────────
 // Empty state
@@ -154,13 +143,6 @@ export default function TerminalSessionScreen(): React.ReactElement {
     }))
   );
 
-  // InputLockState retained as a noop placeholder until F6 removes
-  // InputLockBanner entirely (v2 protocol has no INPUT_LOCK message).
-  const [inputLockState] = useState<InputLockState>({
-    active: false,
-    clientName: '',
-  });
-
   const [spawningHere, setSpawningHere] = useState(false);
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [showPromptLibrary, setShowPromptLibrary] = useState(false);
@@ -215,30 +197,21 @@ export default function TerminalSessionScreen(): React.ReactElement {
     };
   }, []);
 
-  // ── Long press on terminal text ───────────────
-
-  const handleTextLongPress = useCallback((text: string) => {
-    setSelectedText(text);
-    setShowClipboard(true);
-  }, []);
-
   // ── Open handlers ─────────────────────────────
 
-  const handleOpenPromptLibrary = useCallback(() => {
-    setShowPromptLibrary(true);
-  }, []);
-
   const handleOpenClipboard = useCallback(() => {
-    // Toolbar 📋 → clipboard history sheet (manage / paste any past entry).
-    // Terminal long-press still opens ClipboardPopup with selection actions.
+    // (Reserved for header / Composer overflow menu — F23+ will surface
+    // clipboard-history from a chip near the Composer.)
     setShowClipboardHistory(true);
   }, []);
+  // Silence unused-var until the menu lands:
+  void handleOpenClipboard;
 
   // ── Clipboard bubble paste ────────────────────
 
   const handleBubblePaste = useCallback(() => {
     if (sessionId && clipboardContent) {
-      wsClient.sendInput(sessionId, clipboardContent);
+      wsClient.sendUserText(sessionId, clipboardContent);
     }
     setShowBubble(false);
     clipboardService.hideBubble();
@@ -254,7 +227,7 @@ export default function TerminalSessionScreen(): React.ReactElement {
   const handleSelectPrompt = useCallback(
     (content: string) => {
       if (sessionId) {
-        wsClient.sendInput(sessionId, content);
+        wsClient.sendUserText(sessionId, content);
       }
     },
     [sessionId]
@@ -305,12 +278,6 @@ export default function TerminalSessionScreen(): React.ReactElement {
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      {/* Input lock banner */}
-      <InputLockBanner
-        isVisible={inputLockState.active}
-        clientName={inputLockState.clientName}
-      />
-
       {/* Read-only banner for external sessions */}
       {isReadOnly && session && (
         <ReadOnlyBanner
@@ -344,19 +311,9 @@ export default function TerminalSessionScreen(): React.ReactElement {
         }}
       />
 
-      {/* Control bar + input — both hidden for read-only external sessions */}
-      {!isReadOnly && (
-        <>
-          <ControlBar
-            sessionId={sessionId ?? ''}
-            onOpenPromptLibrary={handleOpenPromptLibrary}
-            onOpenClipboard={handleOpenClipboard}
-          />
-          <InputBar
-            sessionId={sessionId ?? ''}
-            waitingForInput={session?.waitingForInput ?? false}
-          />
-        </>
+      {/* Composer — hidden for read-only external sessions */}
+      {!isReadOnly && !showEmpty && (
+        <Composer sessionId={sessionId ?? ''} />
       )}
 
       {/* Clipboard popup — shown on terminal text long-press */}
