@@ -22,6 +22,9 @@ import { networkStatus } from '../services/network-status';
 import { requestNotificationPermissions } from '../services/notification.service';
 import { useKeepScreenOn } from '../hooks/useKeepScreenOn';
 import { ErrorBoundary } from '../components/ui/ErrorBoundary';
+import { registerAllToolCards } from '../components/chat/tools/registerBuiltins';
+
+registerAllToolCards();
 
 // Keep the splash screen visible until fonts are ready (or we give up)
 SplashScreen.preventAutoHideAsync().catch(() => {

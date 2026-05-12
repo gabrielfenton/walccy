@@ -8,7 +8,7 @@
 // ThinkingCard; F9..F20 add tool cards via the registry pattern. Unknown
 // entry kinds fall through to a tiny info row so we don't lose data.
 
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import { FlashList, FlashListRef, ListRenderItemInfo } from '@shopify/flash-list';
 import { useMessagesStore } from '../../stores/messages.store';
-import type { ChatEntry } from '../../stores/messages.store';
+import type { ChatEntry, ChatEntryTool } from '../../stores/messages.store';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { UserBubble } from './UserBubble';
@@ -31,7 +31,10 @@ interface MessageListProps {
   sessionId: string;
 }
 
-function renderEntry({ item }: ListRenderItemInfo<ChatEntry>): React.ReactElement {
+function renderEntry(
+  { item }: ListRenderItemInfo<ChatEntry>,
+  childMap: Map<string, ChatEntryTool[]>,
+): React.ReactElement {
   switch (item.kind) {
     case 'user':
       return <UserBubble content={item.content} />;
@@ -45,8 +48,13 @@ function renderEntry({ item }: ListRenderItemInfo<ChatEntry>): React.ReactElemen
           timestamp={item.timestamp}
         />
       );
-    case 'tool':
+    case 'tool': {
+      const kids = childMap.get(item.toolUseId);
+      if (kids && kids.length > 0) {
+        return <AgentChildrenWrapper parent={item} children={kids} />;
+      }
       return renderToolCard(item);
+    }
     case 'permission_request':
       return <PermissionPlaceholder toolName={item.toolName} />;
     case 'turn_summary':
@@ -63,6 +71,29 @@ function renderEntry({ item }: ListRenderItemInfo<ChatEntry>): React.ReactElemen
   }
 }
 
+// AgentChildrenWrapper — visual grouping for sub-agent tool calls.
+// MessageList owns this concern so the tool-card registry signature stays
+// `(entry) => ReactElement` for the parallel F9 work. When F16's AgentCard
+// lands, it just renders normally and children fall into place below.
+function AgentChildrenWrapper({
+  parent,
+  children,
+}: {
+  parent: ChatEntryTool;
+  children: ChatEntryTool[];
+}): React.ReactElement {
+  return (
+    <View>
+      {renderToolCard(parent)}
+      <View style={{ marginLeft: 18 }}>
+        {children.map((c) => (
+          <View key={c.id}>{renderToolCard(c)}</View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function keyExtractor(item: ChatEntry): string {
   return item.id;
 }
@@ -71,16 +102,49 @@ function MessageListBase({ sessionId }: MessageListProps): React.ReactElement {
   const buffer = useMessagesStore((s) => s.buffers[sessionId]);
   const entries = buffer?.entries ?? [];
 
+  // Pre-pass: group sub-agent tool calls under their parent. A tool entry
+  // whose `parentToolUseId` matches another tool entry's `toolUseId` in the
+  // same buffer is treated as a child and removed from the top-level list.
+  // Orphan children (parent not found in buffer) fall through to top level
+  // so we never silently drop data.
+  const { visibleEntries, childMap } = useMemo(() => {
+    const parentIds = new Set<string>();
+    for (const e of entries) {
+      if (e.kind === 'tool') parentIds.add(e.toolUseId);
+    }
+    const map = new Map<string, ChatEntryTool[]>();
+    const visible: ChatEntry[] = [];
+    for (const e of entries) {
+      if (
+        e.kind === 'tool' &&
+        e.parentToolUseId !== null &&
+        parentIds.has(e.parentToolUseId)
+      ) {
+        const arr = map.get(e.parentToolUseId);
+        if (arr) arr.push(e);
+        else map.set(e.parentToolUseId, [e]);
+        continue;
+      }
+      visible.push(e);
+    }
+    return { visibleEntries: visible, childMap: map };
+  }, [entries]);
+
   const listRef = useRef<FlashListRef<ChatEntry>>(null);
   const [atBottom, setAtBottom] = useState(true);
 
-  const lengthRef = useRef(entries.length);
+  const lengthRef = useRef(visibleEntries.length);
   useEffect(() => {
-    if (entries.length > lengthRef.current && atBottom) {
+    if (visibleEntries.length > lengthRef.current && atBottom) {
       listRef.current?.scrollToEnd({ animated: false });
     }
-    lengthRef.current = entries.length;
-  }, [entries.length, atBottom]);
+    lengthRef.current = visibleEntries.length;
+  }, [visibleEntries.length, atBottom]);
+
+  const renderItem = useCallback(
+    (info: ListRenderItemInfo<ChatEntry>) => renderEntry(info, childMap),
+    [childMap],
+  );
 
   const onScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -101,8 +165,8 @@ function MessageListBase({ sessionId }: MessageListProps): React.ReactElement {
     <View style={styles.container}>
       <FlashList
         ref={listRef}
-        data={entries}
-        renderItem={renderEntry}
+        data={visibleEntries}
+        renderItem={renderItem}
         keyExtractor={keyExtractor}
         estimatedItemSize={80}
         onScroll={onScroll}
