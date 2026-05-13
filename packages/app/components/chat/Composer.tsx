@@ -51,6 +51,7 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
   const activeMode: PermissionMode = permissionMode ?? 'default';
   const streaming = status === 'active' && !waitingForInput;
   const canSend = text.trim().length > 0 && !streaming;
+  const bypassActive = activeMode === 'bypassPermissions';
 
   const handleSend = useCallback(() => {
     const body = text.trim();
@@ -81,23 +82,41 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
       <View style={styles.chipRow}>
         {MODE_OPTIONS.map(({ mode, label }) => {
           const active = mode === activeMode;
+          const isBypass = mode === 'bypassPermissions';
+          const activeStyle = active
+            ? isBypass
+              ? styles.chipActiveDanger
+              : styles.chipActive
+            : styles.chipInactive;
+          const activeTextStyle = active
+            ? isBypass
+              ? styles.chipTextActiveDanger
+              : styles.chipTextActive
+            : styles.chipTextInactive;
           return (
             <TouchableOpacity
               key={mode}
-              style={[styles.chip, active ? styles.chipActive : styles.chipInactive]}
+              style={[styles.chip, activeStyle]}
               onPress={() => handleModePress(mode)}
               activeOpacity={0.75}
               accessibilityRole="button"
               accessibilityLabel={`Permission mode ${label}`}
               accessibilityState={{ selected: active }}
             >
-              <Text style={[styles.chipText, active ? styles.chipTextActive : styles.chipTextInactive]}>
+              <Text style={[styles.chipText, activeTextStyle]}>
                 {label}
               </Text>
             </TouchableOpacity>
           );
         })}
       </View>
+      {bypassActive ? (
+        <View style={styles.bypassBanner}>
+          <Text style={styles.bypassBannerText}>
+            ⚠ Bypass mode — tools auto-approved
+          </Text>
+        </View>
+      ) : null}
       <View style={styles.inputRow}>
       <TextInput
         style={styles.input}
@@ -162,9 +181,9 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   chip: {
-    minHeight: 36,
+    minHeight: 44,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 10,
     borderRadius: 14,
     borderWidth: 1,
     alignItems: 'center',
@@ -173,6 +192,10 @@ const styles = StyleSheet.create({
   chipActive: {
     backgroundColor: Colors.accent,
     borderColor: Colors.accent,
+  },
+  chipActiveDanger: {
+    backgroundColor: Colors.accentRed + '33',
+    borderColor: Colors.accentRed,
   },
   chipInactive: {
     backgroundColor: 'transparent',
@@ -186,8 +209,27 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: Colors.textPrimary,
   },
+  chipTextActiveDanger: {
+    color: Colors.accentRed,
+  },
   chipTextInactive: {
     color: Colors.textSecondary,
+  },
+  bypassBanner: {
+    marginHorizontal: 4,
+    marginBottom: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: Colors.accentAmber,
+    borderRadius: 4,
+    backgroundColor: Colors.accentAmber + '14',
+  },
+  bypassBannerText: {
+    color: Colors.accentAmber,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: '600',
   },
   containerWaiting: {
     borderTopColor: Colors.accentAmber,

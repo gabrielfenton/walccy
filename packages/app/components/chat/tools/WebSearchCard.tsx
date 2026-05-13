@@ -3,8 +3,8 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
-import { resultToText } from './searchHelpers';
+import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
+import { resultToText, truncate } from './searchHelpers';
 
 interface WebSearchCardProps {
   entry: ChatEntryTool;
@@ -16,14 +16,14 @@ interface WebSearchInput {
   blocked_domains?: string[];
 }
 
-function truncate(s: string, n: number): string {
-  if (s.length <= n) return s;
-  return s.slice(0, n - 1) + '…';
-}
-
 function nonEmptyStrings(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((d): d is string => typeof d === 'string' && d.length > 0);
+}
+
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function WebSearchCardBase({ entry }: WebSearchCardProps): React.ReactElement {
@@ -37,14 +37,26 @@ function WebSearchCardBase({ entry }: WebSearchCardProps): React.ReactElement {
 
   const text = useMemo(() => resultToText(entry.result), [entry.result]);
 
-  let header: React.ReactNode = null;
-  if (entry.state !== 'running' && query.length > 0) {
-    header = (
-      <Text style={styles.queryHeader} numberOfLines={1}>
-        {truncate(query, 36)}
-      </Text>
-    );
-  }
+  const header = useMemo<ToolCardHeaderData>(() => {
+    const identity = query.length > 0 ? truncate(query, 36) : undefined;
+    const chips: ToolCardChip[] = [];
+    if (entry.state !== 'running') {
+      const domainCount = allowed.length + blocked.length;
+      if (domainCount > 0) {
+        chips.push({
+          text: `+${domainCount} ${domainCount === 1 ? 'domain' : 'domains'}`,
+          tone: 'neutral',
+          mono: false,
+        });
+      }
+    }
+    let errorSummary: string | undefined;
+    if (entry.state === 'error') {
+      const line = firstLine(resultToText(entry.result)).trim();
+      if (line.length > 0) errorSummary = truncate(line, 80);
+    }
+    return { identity, chips, errorSummary };
+  }, [query, allowed.length, blocked.length, entry.state, entry.result]);
 
   return (
     <ToolCard
@@ -125,11 +137,6 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.mono,
     fontSize: FontSize.body - 2,
     color: Colors.textPrimary,
-  },
-  queryHeader: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.textSecondary,
   },
   chipsBlock: {
     marginTop: 10,

@@ -1,10 +1,10 @@
-import React, { memo, useCallback, useState } from 'react';
+import React, { memo, useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
-import { resultToText } from './searchHelpers';
+import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
+import { resultToText, truncate } from './searchHelpers';
 
 interface AgentCardProps {
   entry: ChatEntryTool;
@@ -19,8 +19,9 @@ interface AgentInput {
   run_in_background?: boolean;
 }
 
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function AgentCardBase({ entry }: AgentCardProps): React.ReactElement {
@@ -36,23 +37,27 @@ function AgentCardBase({ entry }: AgentCardProps): React.ReactElement {
   const background = input.run_in_background === true;
   const isWorktree = isolation === 'worktree';
 
-  let header: React.ReactNode = null;
-  if (entry.state !== 'running') {
-    header = (
-      <View style={styles.headerInner}>
-        {description.length > 0 && (
-          <Text style={styles.description} numberOfLines={1}>
-            {truncate(description, 24)}
-          </Text>
-        )}
-        {subagentType.length > 0 && (
-          <Text style={styles.pill}>{subagentType}</Text>
-        )}
-        {model.length > 0 && <Text style={styles.modelChip}>{model}</Text>}
-        {isWorktree && <Text style={styles.worktree}>⊞</Text>}
-      </View>
-    );
-  }
+  const header = useMemo<ToolCardHeaderData>(() => {
+    const identity = description.length > 0 ? truncate(description, 24) : undefined;
+    const chips: ToolCardChip[] = [];
+    if (entry.state !== 'running') {
+      if (subagentType.length > 0) {
+        chips.push({ text: subagentType, tone: 'accent', mono: true });
+      }
+      if (model.length > 0) {
+        chips.push({ text: model, tone: 'neutral' });
+      }
+      if (isWorktree) {
+        chips.push({ text: 'worktree', tone: 'warn' });
+      }
+    }
+    let errorSummary: string | undefined;
+    if (entry.state === 'error') {
+      const line = firstLine(resultToText(entry.result)).trim();
+      if (line.length > 0) errorSummary = truncate(line, 80);
+    }
+    return { identity, chips, errorSummary };
+  }, [description, subagentType, model, isWorktree, entry.state, entry.result]);
 
   const report = resultToText(entry.result);
 
@@ -106,36 +111,6 @@ function AgentCardBase({ entry }: AgentCardProps): React.ReactElement {
 }
 
 const styles = StyleSheet.create({
-  headerInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  description: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.textSecondary,
-    maxWidth: 180,
-  },
-  pill: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.accent,
-    backgroundColor: Colors.accent + '22',
-    paddingHorizontal: 6,
-    borderRadius: 6,
-  },
-  modelChip: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.textSecondary,
-  },
-  worktree: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.accentAmber,
-    fontWeight: FontWeight.semiBold,
-  },
   label: {
     fontFamily: FontFamily.ui,
     fontSize: FontSize.caption,

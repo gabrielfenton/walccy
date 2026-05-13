@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
+import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
 
 interface TodoCardProps {
   entry: ChatEntryTool;
@@ -52,27 +52,19 @@ function TodoCardBase({ entry }: TodoCardProps): React.ReactElement {
     return { done: d, total: todos.length, active: a };
   }, [todos]);
 
-  let header: React.ReactNode = null;
-  if (entry.state !== 'running' && total > 0) {
-    const allDone = done === total;
-    header = (
-      <View style={styles.headerInner}>
-        <Text
-          style={[
-            styles.chip,
-            { color: allDone ? Colors.accentGreen : Colors.textSecondary },
-          ]}
-        >
-          {`${done} done / ${total}`}
-        </Text>
-        {active > 0 && (
-          <Text style={[styles.chip, { color: Colors.accentAmber }]}>
-            {`·${active} active`}
-          </Text>
-        )}
-      </View>
-    );
-  }
+  const header = useMemo<ToolCardHeaderData>(() => {
+    const chips: ToolCardChip[] = [];
+    if (entry.state !== 'running' && total > 0) {
+      chips.push({
+        text: `${done}/${total}`,
+        tone: done === total ? 'good' : 'neutral',
+      });
+      if (active > 0) {
+        chips.push({ text: `${active} active`, tone: 'warn' });
+      }
+    }
+    return { chips };
+  }, [entry.state, done, total, active]);
 
   return (
     <ToolCard
@@ -123,16 +115,6 @@ function TodoCardBase({ entry }: TodoCardProps): React.ReactElement {
 }
 
 const styles = StyleSheet.create({
-  headerInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  chip: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    fontWeight: FontWeight.semiBold,
-  },
   row: {
     flexDirection: 'row',
     alignItems: 'flex-start',

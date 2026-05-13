@@ -1,9 +1,10 @@
-import React, { memo, useCallback, useState } from 'react';
+import React, { memo, useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
+import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
+import { resultToText, truncate } from './searchHelpers';
 
 interface BashCardProps {
   entry: ChatEntryTool;
@@ -17,17 +18,9 @@ interface BashInput {
   timeout?: number;
 }
 
-function resultToText(result: unknown): string {
-  if (!Array.isArray(result)) return '';
-  const allText = result.every(
-    (b): b is { type: 'text'; text: string } =>
-      b != null &&
-      typeof b === 'object' &&
-      (b as { type?: unknown }).type === 'text' &&
-      typeof (b as { text?: unknown }).text === 'string',
-  );
-  if (!allText) return '';
-  return result.map((b) => b.text).join('');
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function BashCardBase({ entry }: BashCardProps): React.ReactElement {
@@ -45,19 +38,34 @@ function BashCardBase({ entry }: BashCardProps): React.ReactElement {
   const exitCode = structured?.exitCode;
   const interrupted = structured?.interrupted === true;
 
-  let header: React.ReactNode = null;
-  if (entry.state !== 'running' && hasStructured) {
-    if (interrupted) {
-      header = <Text style={[styles.chip, { color: Colors.accentAmber }]}>interrupted</Text>;
-    } else if (typeof exitCode === 'number') {
-      const ok = exitCode === 0;
-      header = (
-        <Text style={[styles.chip, { color: ok ? Colors.accentGreen : Colors.accentRed }]}>
-          {`exit ${exitCode}`}
-        </Text>
-      );
+  const header = useMemo<ToolCardHeaderData>(() => {
+    const identity = description.length > 0 ? description : truncate(command, 40);
+    const chips: ToolCardChip[] = [];
+    if (entry.state !== 'running' && hasStructured) {
+      if (interrupted) {
+        chips.push({ text: 'interrupted', tone: 'warn' });
+      } else if (typeof exitCode === 'number') {
+        if (exitCode === 0) chips.push({ text: 'exit 0', tone: 'good' });
+        else chips.push({ text: `exit ${exitCode}`, tone: 'bad' });
+      }
     }
-  }
+    let errorSummary: string | undefined;
+    if (entry.state === 'error') {
+      const src = stderr.length > 0 ? stderr : resultToText(entry.result);
+      const line = firstLine(src).trim();
+      if (line.length > 0) errorSummary = truncate(line, 80);
+    }
+    return { identity: identity.length > 0 ? identity : undefined, chips, errorSummary };
+  }, [
+    description,
+    command,
+    entry.state,
+    entry.result,
+    hasStructured,
+    interrupted,
+    exitCode,
+    stderr,
+  ]);
 
   const fallbackText = !stdout && !stderr ? resultToText(entry.result) : '';
   const showFallback = fallbackText.length > 0;
@@ -148,7 +156,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   scroll: {
-    maxHeight: 240,
+    maxHeight: 400,
   },
   stdoutText: {
     fontFamily: FontFamily.mono,
@@ -165,11 +173,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.caption,
     fontStyle: 'italic',
     color: Colors.textSecondary,
-  },
-  chip: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    fontWeight: FontWeight.semiBold,
   },
 });
 

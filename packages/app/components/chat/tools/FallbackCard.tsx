@@ -1,25 +1,18 @@
-import React, { memo, useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useCallback, useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
+import { ToolCard, type ToolCardHeaderData } from './ToolCard';
+import { resultToText, truncate } from './searchHelpers';
 
 interface FallbackCardProps {
   entry: ChatEntryTool;
 }
 
 function renderResult(result: unknown): string {
-  if (Array.isArray(result)) {
-    const allText = result.every(
-      (b): b is { type: 'text'; text: string } =>
-        b != null &&
-        typeof b === 'object' &&
-        (b as { type?: unknown }).type === 'text' &&
-        typeof (b as { text?: unknown }).text === 'string',
-    );
-    if (allText) return result.map((b) => b.text).join('');
-  }
+  const asText = resultToText(result);
+  if (asText.length > 0) return asText;
   if (typeof result === 'string') return result;
   try {
     return JSON.stringify(result, null, 2);
@@ -35,14 +28,22 @@ function isEmptyResult(result: unknown): boolean {
   return false;
 }
 
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return i >= 0 ? s.slice(0, i) : s;
+}
+
 function FallbackCardBase({ entry }: FallbackCardProps): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const onToggle = useCallback(() => setExpanded((v) => !v), []);
 
-  const header =
-    entry.state === 'error' ? (
-      <Text style={styles.headerSummary}>error</Text>
-    ) : null;
+  const header = useMemo<ToolCardHeaderData>(() => {
+    if (entry.state === 'error') {
+      const line = firstLine(resultToText(entry.result)).trim();
+      return { errorSummary: line.length > 0 ? truncate(line, 80) : 'error' };
+    }
+    return {};
+  }, [entry.state, entry.result]);
 
   const showResult = !isEmptyResult(entry.result);
   const inputJson = JSON.stringify(entry.input, null, 2);
@@ -87,11 +88,6 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.mono,
     fontSize: FontSize.body - 2,
     color: Colors.textSecondary,
-  },
-  headerSummary: {
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.caption,
-    color: Colors.accentRed,
   },
 });
 

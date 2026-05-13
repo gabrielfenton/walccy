@@ -2,7 +2,7 @@
 // PermissionCard — interactive allow/deny card for permission_request
 // ──────────────────────────────────────────────
 
-import React, { memo, useCallback, useMemo } from 'react';
+import React, { memo, useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { ChatEntryPermissionRequest } from '../../stores/messages.store';
 import { useMessagesStore } from '../../stores/messages.store';
@@ -17,6 +17,7 @@ interface PermissionCardProps {
 
 function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.ReactElement {
   const resolved = entry.resolved;
+  const [expanded, setExpanded] = useState(false);
 
   const onPressAllow = useCallback(() => {
     useMessagesStore.getState().markPermissionResolved(sessionId, entry.requestId, 'allowed');
@@ -36,21 +37,62 @@ function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.Re
     }
   }, [entry.input]);
 
+  const hasModelStrings = !!(entry.title || entry.description);
+
+  // ── Resolved + collapsed: compact row ──
+  if (resolved && !expanded) {
+    const isAllowed = resolved === 'allowed';
+    const color = isAllowed ? Colors.accentGreen : Colors.accentRed;
+    return (
+      <TouchableOpacity
+        style={[styles.compactRow, { borderLeftColor: color }]}
+        onPress={() => setExpanded(true)}
+        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`${isAllowed ? 'Allowed' : 'Denied'} ${entry.toolName}, tap to expand`}
+      >
+        <Text style={[styles.compactGlyph, { color }]}>{isAllowed ? '✓' : '✗'}</Text>
+        <Text style={styles.compactLabel} numberOfLines={1}>
+          {isAllowed ? 'Allowed' : 'Denied'} · {entry.toolName}
+        </Text>
+        <Text style={styles.compactChevron}>›</Text>
+      </TouchableOpacity>
+    );
+  }
+
+  // ── Pending or resolved+expanded: full card ──
+  const borderColor = resolved
+    ? resolved === 'allowed'
+      ? Colors.accentGreen
+      : Colors.accentRed
+    : Colors.accentAmber;
+
   return (
-    <View
-      style={[
-        styles.card,
-        { borderLeftColor: resolved ? Colors.border : Colors.accentAmber },
-        resolved ? styles.resolved : null,
-      ]}
-    >
+    <View style={[styles.card, { borderLeftColor: borderColor }]}>
       <View style={styles.headerRow}>
-        <Text style={styles.headerGlyph}>?  </Text>
+        <Text style={[styles.headerGlyph, { color: borderColor }]}>?  </Text>
         <Text style={styles.toolName}>{entry.toolName}</Text>
         <Text style={styles.headerCaption}>  wants to run</Text>
+        {resolved && expanded ? (
+          <TouchableOpacity
+            onPress={() => setExpanded(false)}
+            style={styles.collapseBtn}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Collapse"
+          >
+            <Text style={styles.compactChevron}>⌃</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
-      {entry.title ? <Text style={styles.title}>{entry.title}</Text> : null}
-      {entry.description ? <Text style={styles.description}>{entry.description}</Text> : null}
+
+      {hasModelStrings ? (
+        <View style={styles.modelBlock}>
+          <Text style={styles.modelLabel}>⟨from model⟩</Text>
+          {entry.title ? <Text style={styles.title}>{entry.title}</Text> : null}
+          {entry.description ? <Text style={styles.description}>{entry.description}</Text> : null}
+        </View>
+      ) : null}
 
       <View style={styles.inputBlock}>
         <ScrollView style={styles.inputScroll} nestedScrollEnabled>
@@ -60,21 +102,13 @@ function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.Re
 
       {resolved ? (
         <View style={styles.statusRow}>
-          <Text
-            style={[
-              styles.statusText,
-              { color: resolved === 'allowed' ? Colors.accentGreen : Colors.accentRed },
-            ]}
-          >
-            {resolved === 'allowed' ? 'Allowed' : 'Denied'}
-          </Text>
+          <Text style={styles.resolvedNote}>Resolved</Text>
         </View>
       ) : (
         <View style={styles.actionRow}>
           <TouchableOpacity
             style={[styles.button, styles.denyButton]}
             onPress={onPressDeny}
-            disabled={!!resolved}
             activeOpacity={0.75}
             accessibilityRole="button"
             accessibilityLabel="Deny tool"
@@ -84,7 +118,6 @@ function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.Re
           <TouchableOpacity
             style={[styles.button, styles.allowButton]}
             onPress={onPressAllow}
-            disabled={!!resolved}
             activeOpacity={0.75}
             accessibilityRole="button"
             accessibilityLabel="Allow tool"
@@ -109,8 +142,45 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     padding: 12,
   },
-  resolved: {
-    opacity: 0.5,
+  compactRow: {
+    marginHorizontal: 12,
+    marginVertical: 4,
+    minHeight: 44,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  compactGlyph: {
+    fontFamily: FontFamily.mono,
+    fontSize: FontSize.body,
+    fontWeight: '700',
+    width: 14,
+    textAlign: 'center',
+  },
+  compactLabel: {
+    flex: 1,
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.body,
+  },
+  compactChevron: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.heading,
+    fontWeight: '600',
+    paddingHorizontal: 4,
+  },
+  collapseBtn: {
+    marginLeft: 'auto',
+    minHeight: 44,
+    minWidth: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerRow: {
     flexDirection: 'row',
@@ -134,11 +204,24 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.ui,
     fontSize: FontSize.caption,
   },
+  modelBlock: {
+    marginTop: 8,
+    backgroundColor: Colors.surfaceHigh,
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  modelLabel: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontStyle: 'italic',
+    marginBottom: 2,
+  },
   title: {
     color: Colors.textPrimary,
     fontFamily: FontFamily.ui,
     fontSize: FontSize.body,
-    marginTop: 6,
   },
   description: {
     color: Colors.textSecondary,
@@ -199,9 +282,10 @@ const styles = StyleSheet.create({
     marginTop: 12,
     alignItems: 'center',
   },
-  statusText: {
+  resolvedNote: {
+    color: Colors.textSecondary,
     fontFamily: FontFamily.ui,
-    fontSize: FontSize.body,
-    fontWeight: '700',
+    fontSize: FontSize.caption,
+    fontStyle: 'italic',
   },
 });

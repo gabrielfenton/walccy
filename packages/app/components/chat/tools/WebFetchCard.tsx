@@ -3,8 +3,8 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
-import { resultToText } from './searchHelpers';
+import { ToolCard, type ToolCardHeaderData } from './ToolCard';
+import { resultToText, truncate } from './searchHelpers';
 
 interface WebFetchCardProps {
   entry: ChatEntryTool;
@@ -25,6 +25,11 @@ function hostnameOf(url: string): string {
   }
 }
 
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return i >= 0 ? s.slice(0, i) : s;
+}
+
 function WebFetchCardBase({ entry }: WebFetchCardProps): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const onToggle = useCallback(() => setExpanded((v) => !v), []);
@@ -36,14 +41,18 @@ function WebFetchCardBase({ entry }: WebFetchCardProps): React.ReactElement {
   const text = useMemo(() => resultToText(entry.result), [entry.result]);
   const host = useMemo(() => (url.length > 0 ? hostnameOf(url) : ''), [url]);
 
-  let header: React.ReactNode = null;
-  if (entry.state !== 'running' && host.length > 0) {
-    header = (
-      <Text style={styles.host} numberOfLines={1}>
-        {host}
-      </Text>
-    );
-  }
+  const header = useMemo<ToolCardHeaderData>(() => {
+    let errorSummary: string | undefined;
+    if (entry.state === 'error') {
+      const line = firstLine(resultToText(entry.result)).trim();
+      if (line.length > 0) errorSummary = truncate(line, 80);
+    }
+    return {
+      identity: host.length > 0 ? host : undefined,
+      chips: [],
+      errorSummary,
+    };
+  }, [host, entry.state, entry.result]);
 
   return (
     <ToolCard
@@ -110,12 +119,6 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.mono,
     fontSize: FontSize.body - 2,
     color: Colors.textPrimary,
-  },
-  host: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.textSecondary,
-    maxWidth: 180,
   },
   empty: {
     fontFamily: FontFamily.ui,

@@ -3,8 +3,8 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
-import { basenameOf, countMatches, resultToText } from './searchHelpers';
+import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
+import { basenameOf, countMatches, resultToText, truncate } from './searchHelpers';
 
 interface GrepCardProps {
   entry: ChatEntryTool;
@@ -31,9 +31,9 @@ function looksRegex(p: string): boolean {
   return REGEX_HINT.test(p);
 }
 
-function truncate(s: string, n: number): string {
-  if (s.length <= n) return s;
-  return s.slice(0, n - 1) + '…';
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function GrepCardBase({ entry }: GrepCardProps): React.ReactElement {
@@ -47,7 +47,7 @@ function GrepCardBase({ entry }: GrepCardProps): React.ReactElement {
 
   const text = useMemo(() => resultToText(entry.result), [entry.result]);
   const matchCount = useMemo(
-    () => countMatches(text, outputMode === 'count' ? 'count' : 'lines'),
+    () => countMatches(text, outputMode === 'count' ? 'count' : 'content'),
     [text, outputMode],
   );
 
@@ -67,27 +67,31 @@ function GrepCardBase({ entry }: GrepCardProps): React.ReactElement {
     return f;
   }, [input, outputMode]);
 
-  let header: React.ReactNode = null;
-  if (entry.state !== 'running') {
+  const header = useMemo<ToolCardHeaderData>(() => {
     const truncated = truncate(pattern, 24);
-    const patternLabel = looksRegex(pattern) ? `/${truncated}/` : truncated;
-    const countColor = matchCount === 0 ? Colors.textSecondary : Colors.accent;
-    header = (
-      <View style={styles.headerInner}>
-        {pattern.length > 0 && (
-          <Text style={styles.pattern} numberOfLines={1}>
-            {patternLabel}
-          </Text>
-        )}
-        {path.length > 0 && (
-          <Text style={styles.basename} numberOfLines={1}>
-            {basenameOf(path)}
-          </Text>
-        )}
-        <Text style={[styles.chip, { color: countColor }]}>{`${matchCount}`}</Text>
-      </View>
-    );
-  }
+    const identity =
+      pattern.length > 0
+        ? looksRegex(pattern)
+          ? `/${truncated}/`
+          : truncated
+        : undefined;
+    const chips: ToolCardChip[] = [];
+    if (entry.state !== 'running') {
+      if (path.length > 0) {
+        chips.push({ text: basenameOf(path), tone: 'neutral', mono: true });
+      }
+      chips.push({
+        text: `${matchCount}`,
+        tone: matchCount > 0 ? 'accent' : 'neutral',
+      });
+    }
+    let errorSummary: string | undefined;
+    if (entry.state === 'error') {
+      const line = firstLine(resultToText(entry.result)).trim();
+      if (line.length > 0) errorSummary = truncate(line, 80);
+    }
+    return { identity, chips, errorSummary };
+  }, [pattern, path, matchCount, entry.state, entry.result]);
 
   return (
     <ToolCard
@@ -157,27 +161,6 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.mono,
     fontSize: FontSize.body - 2,
     color: Colors.textPrimary,
-  },
-  headerInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  pattern: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.textPrimary,
-    maxWidth: 200,
-  },
-  basename: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.textSecondary,
-  },
-  chip: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    fontWeight: FontWeight.semiBold,
   },
   flagsRow: {
     flexDirection: 'row',

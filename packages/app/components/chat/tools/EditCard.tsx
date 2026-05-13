@@ -4,7 +4,8 @@ import { diffLines } from 'diff';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
-import { ToolCard } from './ToolCard';
+import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
+import { basenameOf, resultToText, truncate } from './searchHelpers';
 
 interface EditCardProps {
   entry: ChatEntryTool;
@@ -17,9 +18,21 @@ interface EditInput {
   replace_all?: boolean;
 }
 
-function basenameOf(p: string): string {
-  const parts = p.split('/');
-  return parts[parts.length - 1] ?? p;
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return i >= 0 ? s.slice(0, i) : s;
+}
+
+/**
+ * Count lines in a diff hunk's value, popping the trailing empty element
+ * produced by a final '\n' (matches the body rendering's `pop` so chip
+ * counts and visible lines agree).
+ */
+function countHunkLines(value: string): number {
+  if (value.length === 0) return 0;
+  const lines = value.split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  return lines.length;
 }
 
 function EditCardBase({ entry }: EditCardProps): React.ReactElement {
@@ -39,28 +52,32 @@ function EditCardBase({ entry }: EditCardProps): React.ReactElement {
     let a = 0;
     let r = 0;
     for (const h of hunks) {
-      const c = h.count ?? 0;
+      const c = countHunkLines(h.value);
       if (h.added) a += c;
       else if (h.removed) r += c;
     }
     return { added: a, removed: r };
   }, [hunks]);
 
-  let header: React.ReactNode = null;
-  if (entry.state !== 'running') {
-    header = (
-      <View style={styles.headerInner}>
-        {filePath.length > 0 && (
-          <Text style={styles.basename} numberOfLines={1}>
-            {basenameOf(filePath)}
-            {replaceAll && <Text style={styles.allSuffix}> ·all</Text>}
-          </Text>
-        )}
-        <Text style={[styles.chip, { color: Colors.accentGreen }]}>{`+${added}`}</Text>
-        <Text style={[styles.chip, { color: Colors.accentRed }]}>{`-${removed}`}</Text>
-      </View>
-    );
-  }
+  const header = useMemo<ToolCardHeaderData>(() => {
+    const identity = basenameOf(filePath);
+    const chips: ToolCardChip[] = [];
+    if (entry.state !== 'running') {
+      chips.push({ text: `+${added}`, tone: 'good' });
+      chips.push({ text: `-${removed}`, tone: 'bad' });
+      if (replaceAll) chips.push({ text: '·all', tone: 'warn' });
+    }
+    let errorSummary: string | undefined;
+    if (entry.state === 'error') {
+      const line = firstLine(resultToText(entry.result)).trim();
+      if (line.length > 0) errorSummary = truncate(line, 80);
+    }
+    return {
+      identity: identity.length > 0 ? identity : undefined,
+      chips,
+      errorSummary,
+    };
+  }, [filePath, added, removed, replaceAll, entry.state, entry.result]);
 
   const empty = oldStr.length === 0 && newStr.length === 0;
 
@@ -140,24 +157,6 @@ const styles = StyleSheet.create({
   diffLine: {
     fontFamily: FontFamily.mono,
     fontSize: FontSize.body - 2,
-  },
-  headerInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  basename: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.caption,
-    color: Colors.textSecondary,
-  },
-  allSuffix: {
-    color: Colors.accentAmber,
-  },
-  chip: {
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.caption,
-    fontWeight: FontWeight.semiBold,
   },
   empty: {
     fontFamily: FontFamily.ui,
