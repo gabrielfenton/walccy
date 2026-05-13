@@ -4,6 +4,7 @@ import { EditCard } from './EditCard';
 import { GlobCard } from './GlobCard';
 import { GrepCard } from './GrepCard';
 import { ReadCard } from './ReadCard';
+import { TodoCard } from './TodoCard';
 import { WebFetchCard } from './WebFetchCard';
 import { WebSearchCard } from './WebSearchCard';
 
@@ -14,6 +15,7 @@ export function registerAllToolCards(): void {
   registerToolCard('Glob', GlobCard);
   registerToolCard('Grep', GrepCard);
   registerToolCard('Read', ReadCard);
+  registerToolCard('TodoWrite', TodoCard);
   registerToolCard('WebFetch', WebFetchCard);
   registerToolCard('WebSearch', WebSearchCard);
 }
