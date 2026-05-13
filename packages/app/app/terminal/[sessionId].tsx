@@ -169,6 +169,15 @@ export default function TerminalSessionScreen(): React.ReactElement {
     };
   }, [sessionId, isNoSession, session]);
 
+  // Keep `activeSessionId` in lockstep with the URL so deep-links, browser
+  // back, and tab swaps all reach Settings (F25/F26 gating) and other
+  // surfaces that key off the active session.
+  const setActiveSession = useSessionsStore((s) => s.setActiveSession);
+  useEffect(() => {
+    if (isNoSession) return;
+    setActiveSession(sessionId);
+  }, [sessionId, isNoSession, setActiveSession]);
+
   // (INPUT_LOCK listener removed — v2 protocol has no input-lock concept;
   // a single daemon owns the stdin stream now.)
 
