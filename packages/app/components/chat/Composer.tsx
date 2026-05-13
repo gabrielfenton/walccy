@@ -9,12 +9,14 @@
 
 import React, { useCallback, useState } from 'react';
 import {
+  Alert,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSessionsStore } from '../../stores/sessions.store';
 import { useShallow } from 'zustand/react/shallow';
 import { wsClient } from '../../services/ws-client';
@@ -35,6 +37,7 @@ interface ComposerProps {
 
 export function Composer({ sessionId }: ComposerProps): React.ReactElement {
   const [text, setText] = useState('');
+  const insets = useSafeAreaInsets();
 
   // The session is "streaming" while it is generating a turn — drive the
   // stop/send swap from the daemon-reported status.
@@ -52,6 +55,7 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
   const streaming = status === 'active' && !waitingForInput;
   const canSend = text.trim().length > 0 && !streaming;
   const bypassActive = activeMode === 'bypassPermissions';
+  const autoEditActive = activeMode === 'acceptEdits';
 
   const handleSend = useCallback(() => {
     const body = text.trim();
@@ -67,6 +71,17 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
   const handleModePress = useCallback(
     (mode: PermissionMode) => {
       if (mode === activeMode) return;
+      if (mode === 'bypassPermissions' && activeMode !== 'bypassPermissions') {
+        Alert.alert(
+          'Enable Bypass mode?',
+          'Tool calls will auto-approve without confirmation. You can switch back any time.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Enable', style: 'destructive', onPress: () => wsClient.changePermissionMode(sessionId, mode) },
+          ],
+        );
+        return;
+      }
       wsClient.changePermissionMode(sessionId, mode);
     },
     [sessionId, activeMode],
@@ -77,6 +92,7 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
       style={[
         styles.container,
         waitingForInput && styles.containerWaiting,
+        { paddingBottom: 8 + insets.bottom },
       ]}
     >
       <View style={styles.chipRow}>
@@ -114,6 +130,12 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
         <View style={styles.bypassBanner}>
           <Text style={styles.bypassBannerText}>
             ⚠ Bypass mode — tools auto-approved
+          </Text>
+        </View>
+      ) : autoEditActive ? (
+        <View style={styles.autoEditBanner}>
+          <Text style={styles.autoEditBannerText}>
+            ⚠ Auto-edit — file edits auto-approved
           </Text>
         </View>
       ) : null}
@@ -164,7 +186,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.border,
     paddingHorizontal: 8,
-    paddingBottom: 8,
   },
   inputRow: {
     minHeight: 56,
@@ -226,6 +247,22 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.accentAmber + '14',
   },
   bypassBannerText: {
+    color: Colors.accentAmber,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: '600',
+  },
+  autoEditBanner: {
+    marginHorizontal: 4,
+    marginBottom: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: Colors.accentAmber + '55',
+    borderRadius: 4,
+    backgroundColor: Colors.accentAmber + '14',
+  },
+  autoEditBannerText: {
     color: Colors.accentAmber,
     fontFamily: FontFamily.ui,
     fontSize: FontSize.caption,

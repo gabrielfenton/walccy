@@ -5,10 +5,11 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { basenameOf, firstLine, resultToText, truncate } from './searchHelpers';
+import { basenameOf, firstLine, resultToText, truncate } from './cardFormat';
 
 interface EditCardProps {
   entry: ChatEntryTool;
+  sessionId: string;
 }
 
 interface EditInput {

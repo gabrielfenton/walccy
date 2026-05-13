@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { FallbackCard } from './FallbackCard';
 
-export type ToolCardComponent = React.ComponentType<{ entry: ChatEntryTool }>;
+export type ToolCardComponent = React.ComponentType<{ entry: ChatEntryTool; sessionId: string }>;
 export type ToolCardPredicate = (toolName: string) => boolean;
 
 const registry = new Map<string, ToolCardComponent>();
@@ -24,9 +24,9 @@ export function getToolCard(name: string): ToolCardComponent | null {
   return registry.get(name) ?? null;
 }
 
-export function renderToolCard(entry: ChatEntryTool): ReactElement {
+export function renderToolCard(entry: ChatEntryTool, sessionId: string): ReactElement {
   const exact = registry.get(entry.toolName);
   const Component =
     exact ?? patterns.find((p) => p.predicate(entry.toolName))?.component ?? FallbackCard;
-  return React.createElement(Component, { entry });
+  return React.createElement(Component, { entry, sessionId });
 }

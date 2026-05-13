@@ -279,4 +279,17 @@ describe('messages.store reducer', () => {
     // Clamp keeps the TAIL — the last toolUseId must be the last pushed.
     expect((entries[entries.length - 1] as any).toolUseId).toBe('T-' + (N - 1));
   });
+
+  // ── 9. is_error inside content blocks marks state error ──
+  it('tool_result with is_error content block marks state error', async () => {
+    const store = await freshStore();
+    apply(store, ev.toolUse('TE', 'mcp__x__y', {}));
+    apply(
+      store,
+      ev.toolResult('TE', [{ type: 'text', text: 'err', is_error: true }], false),
+    );
+
+    const tool = getEntries(store).find((e: any) => e.kind === 'tool') as any;
+    expect(tool.state).toBe('error');
+  });
 });

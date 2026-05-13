@@ -4,11 +4,12 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { firstLine, resultToText, truncate } from './searchHelpers';
+import { firstLine, resultToText, truncate } from './cardFormat';
 import { FallbackCard } from './FallbackCard';
 
 interface McpToolCardProps {
   entry: ChatEntryTool;
+  sessionId: string;
 }
 
 function parseMcpToolName(name: string): { server: string; tool: string } | null {
@@ -19,7 +20,13 @@ function parseMcpToolName(name: string): { server: string; tool: string } | null
   return { server: rest.slice(0, idx), tool: rest.slice(idx + 2) };
 }
 
-function McpToolCardBase({ entry }: McpToolCardProps): React.ReactElement {
+// Strip Unicode Format (Cf) chars — RTL marks, zero-width joiners,
+// BOMs, etc. Prevents spoofing attempts via bidi overrides.
+function safeServerName(raw: string): string {
+  return raw.replace(/\p{Cf}/gu, '');
+}
+
+function McpToolCardBase({ entry, sessionId }: McpToolCardProps): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const onToggle = useCallback(() => setExpanded((v) => !v), []);
 
@@ -37,7 +44,7 @@ function McpToolCardBase({ entry }: McpToolCardProps): React.ReactElement {
       if (line.length > 0) errorSummary = truncate(line, 80);
     } else {
       chips.push({ text: 'MCP', tone: 'neutral' });
-      chips.push({ text: parsed.server, tone: 'accent' });
+      chips.push({ text: truncate(safeServerName(parsed.server), 32), tone: 'accent' });
     }
     return {
       chips,
@@ -46,14 +53,14 @@ function McpToolCardBase({ entry }: McpToolCardProps): React.ReactElement {
   }, [parsed, entry.state, resultText]);
 
   if (parsed == null) {
-    return <FallbackCard entry={entry} />;
+    return <FallbackCard entry={entry} sessionId={sessionId} />;
   }
 
   const resultEmpty = resultText.length === 0;
 
   return (
     <ToolCard
-      toolName={truncate(parsed.tool, 32)}
+      toolName={truncate(safeServerName(parsed.tool), 32)}
       state={entry.state}
       header={header}
       expanded={expanded}
@@ -62,12 +69,12 @@ function McpToolCardBase({ entry }: McpToolCardProps): React.ReactElement {
       <View>
         <Text style={styles.label}>server</Text>
         <Text style={styles.mono} selectable>
-          {parsed.server}
+          {truncate(safeServerName(parsed.server), 64)}
         </Text>
 
         <Text style={[styles.label, styles.labelSpaced]}>tool</Text>
         <Text style={styles.mono} selectable>
-          {parsed.tool}
+          {truncate(safeServerName(parsed.tool), 64)}
         </Text>
 
         <Text style={[styles.label, styles.labelSpaced]}>input</Text>

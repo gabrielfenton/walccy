@@ -53,9 +53,9 @@ function renderEntry(
     case 'tool': {
       const kids = childMap.get(item.toolUseId);
       if (kids && kids.length > 0) {
-        return <AgentChildrenWrapper parent={item} children={kids} />;
+        return <AgentChildrenWrapper parent={item} children={kids} sessionId={sessionId} />;
       }
-      return renderToolCard(item);
+      return renderToolCard(item, sessionId);
     }
     case 'permission_request':
       return <PermissionCard entry={item} sessionId={sessionId} />;
@@ -80,16 +80,18 @@ function renderEntry(
 function AgentChildrenWrapper({
   parent,
   children,
+  sessionId,
 }: {
   parent: ChatEntryTool;
   children: ChatEntryTool[];
+  sessionId: string;
 }): React.ReactElement {
   return (
     <View>
-      {renderToolCard(parent)}
+      {renderToolCard(parent, sessionId)}
       <View style={{ marginLeft: 18 }}>
         {children.map((c) => (
-          <View key={c.id}>{renderToolCard(c)}</View>
+          <View key={c.id}>{renderToolCard(c, sessionId)}</View>
         ))}
       </View>
     </View>

@@ -15,9 +15,19 @@ interface PermissionCardProps {
   sessionId: string;
 }
 
+const JSON_DISPLAY_CAP = 4000;
+
+// Strip Format (Cf) chars — RTL marks, zero-width joiners, BOMs. They can
+// hide fields from the user above the Allow button.
+function stripFormatChars(s: string): string {
+  // \p{Cf} requires the unicode flag; RN's Hermes supports it.
+  return s.replace(/\p{Cf}/gu, '');
+}
+
 function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.ReactElement {
   const resolved = entry.resolved;
   const [expanded, setExpanded] = useState(false);
+  const [showFullInput, setShowFullInput] = useState(false);
 
   const onPressAllow = useCallback(() => {
     useMessagesStore.getState().markPermissionResolved(sessionId, entry.requestId, 'allowed');
@@ -29,13 +39,30 @@ function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.Re
     wsClient.resolvePermission(sessionId, entry.requestId, 'deny');
   }, [sessionId, entry.requestId]);
 
-  const inputJson = useMemo(() => {
+  const { inputJson, inputTruncated, hiddenChars } = useMemo(() => {
+    let raw: string;
     try {
-      return JSON.stringify(entry.input, null, 2);
+      raw = JSON.stringify(entry.input, null, 2);
     } catch {
-      return String(entry.input);
+      raw = String(entry.input);
     }
-  }, [entry.input]);
+    const clean = stripFormatChars(raw);
+    if (showFullInput || clean.length <= JSON_DISPLAY_CAP) {
+      return { inputJson: clean, inputTruncated: false, hiddenChars: 0 };
+    }
+    const hidden = clean.length - JSON_DISPLAY_CAP;
+    return {
+      inputJson: clean.slice(0, JSON_DISPLAY_CAP) + `\n… (${hidden} more chars hidden — expand for full input)`,
+      inputTruncated: true,
+      hiddenChars: hidden,
+    };
+  }, [entry.input, showFullInput]);
+
+  const safeTitle = useMemo(() => (entry.title ? stripFormatChars(entry.title) : ''), [entry.title]);
+  const safeDescription = useMemo(
+    () => (entry.description ? stripFormatChars(entry.description) : ''),
+    [entry.description],
+  );
 
   const hasModelStrings = !!(entry.title || entry.description);
 
@@ -89,8 +116,8 @@ function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.Re
       {hasModelStrings ? (
         <View style={styles.modelBlock}>
           <Text style={styles.modelLabel}>⟨from model⟩</Text>
-          {entry.title ? <Text style={styles.title}>{entry.title}</Text> : null}
-          {entry.description ? <Text style={styles.description}>{entry.description}</Text> : null}
+          {entry.title ? <Text style={styles.title}>{safeTitle}</Text> : null}
+          {entry.description ? <Text style={styles.description}>{safeDescription}</Text> : null}
         </View>
       ) : null}
 
@@ -98,6 +125,17 @@ function PermissionCardBase({ entry, sessionId }: PermissionCardProps): React.Re
         <ScrollView style={styles.inputScroll} nestedScrollEnabled>
           <Text style={styles.inputText}>{inputJson}</Text>
         </ScrollView>
+        {inputTruncated ? (
+          <TouchableOpacity
+            onPress={() => setShowFullInput(true)}
+            style={styles.showFullBtn}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel={`Show full input, ${hiddenChars} more chars`}
+          >
+            <Text style={styles.showFullText}>Show full input ({hiddenChars} more chars)</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {resolved ? (
@@ -243,6 +281,18 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontFamily: FontFamily.mono,
     fontSize: FontSize.body - 2,
+  },
+  showFullBtn: {
+    marginTop: 6,
+    minHeight: 32,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
+  showFullText: {
+    color: Colors.accent,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: '600',
   },
   actionRow: {
     flexDirection: 'row',

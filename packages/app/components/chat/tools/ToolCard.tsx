@@ -20,6 +20,8 @@ export interface ToolCardHeaderData {
   chips?: ToolCardChip[];
   /** One-line plain text rendered RED in place of chips when state === 'error'. */
   errorSummary?: string;
+  /** Optional variant-owned trailing slot (e.g. Answer / Accept-Reject buttons). */
+  action?: ReactNode;
 }
 
 export interface ToolCardProps {
@@ -134,6 +136,11 @@ function ToolCardBase({
     if (onToggleExpand) onToggleExpand();
   };
 
+  const showAction =
+    header?.action != null &&
+    state !== 'running' &&
+    !(state === 'error' && header.errorSummary != null && header.errorSummary.length > 0);
+
   const headerContent = (
     <View style={styles.headerRow}>
       <Text style={[styles.glyph, { color: borderColorFor(state) }]}>{glyphFor(state)}</Text>
@@ -143,6 +150,7 @@ function ToolCardBase({
       <View style={styles.headerSlot}>
         <HeaderContent state={state} header={header} />
       </View>
+      {showAction && <View style={styles.actionSlot}>{header!.action}</View>}
       {onToggleExpand && (
         <Text style={styles.chevron}>{expanded ? '▾' : '▸'}</Text>
       )}
@@ -230,6 +238,10 @@ const styles = StyleSheet.create({
     fontSize: FontSize.caption,
     color: Colors.accentRed,
     maxWidth: 240,
+  },
+  actionSlot: {
+    flexDirection: 'row',
+    gap: 6,
   },
   chevron: {
     fontFamily: FontFamily.mono,

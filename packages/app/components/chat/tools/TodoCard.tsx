@@ -7,6 +7,7 @@ import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard
 
 interface TodoCardProps {
   entry: ChatEntryTool;
+  sessionId: string;
 }
 
 type TodoStatus = 'pending' | 'in_progress' | 'completed';

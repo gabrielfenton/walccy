@@ -251,9 +251,10 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       const idx = findToolIdxByUseId(buf.entries, event.toolUseId);
       if (idx >= 0) {
         const prev = buf.entries[idx] as ChatEntryTool;
+        const isError = event.isError || contentHasError(event.content);
         buf.entries[idx] = {
           ...prev,
-          state: event.isError ? 'error' : 'complete',
+          state: isError ? 'error' : 'complete',
           result: event.content,
           structured: event.structured,
         };
@@ -373,6 +374,13 @@ function findLastStreamingThinkingIdx(entries: ChatEntry[]): number {
     if (e.kind === 'assistant' || e.kind === 'thinking') return -1;
   }
   return -1;
+}
+
+function contentHasError(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (b) => b != null && typeof b === 'object' && (b as { is_error?: unknown }).is_error === true,
+  );
 }
 
 function findToolIdxByUseId(entries: ChatEntry[], toolUseId: string): number {

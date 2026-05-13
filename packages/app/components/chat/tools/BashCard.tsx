@@ -4,10 +4,11 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { firstLine, resultToText, truncate } from './searchHelpers';
+import { firstLine, resultToText, truncate } from './cardFormat';
 
 interface BashCardProps {
   entry: ChatEntryTool;
+  sessionId: string;
 }
 
 // Shape from the Claude Code SDK Bash tool input.
