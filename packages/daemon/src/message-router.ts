@@ -14,6 +14,7 @@ import type { WalccyConfig } from './config.js';
 import { ClientRegistry, ConnectedClient } from './client-registry.js';
 import { handleAuth } from './auth-handler.js';
 import { handleSpawnSession } from './spawn-handler.js';
+import { handleListMemory } from './memory-handler.js';
 import logger from './logger.js';
 
 export interface RouterDeps {
@@ -114,6 +115,12 @@ export class MessageRouter {
       case 'CONTROL_MESSAGE':
         void this._handleControlMessage(client, typed);
         break;
+      case 'LIST_MEMORY':
+        void handleListMemory(client, typed, {
+          sessionManager: this.deps.sessionManager,
+          registry: this.deps.registry,
+        });
+        break;
       default: {
         const _exhaustive: never = typed;
         void _exhaustive;
@@ -167,6 +174,15 @@ export class MessageRouter {
           msg.cwd.length <= 4096 &&
           typeof msg.requestId === 'string' &&
           msg.requestId.length > 0
+        );
+      case 'LIST_MEMORY':
+        return (
+          typeof msg.requestId === 'string' &&
+          msg.requestId.length > 0 &&
+          typeof msg.sessionId === 'string' &&
+          msg.sessionId.length > 0 &&
+          (msg.fileName === undefined ||
+            (typeof msg.fileName === 'string' && msg.fileName.length <= 256))
         );
       case 'CONTROL_MESSAGE':
         return (

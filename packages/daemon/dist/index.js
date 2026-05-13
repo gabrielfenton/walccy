@@ -3,8 +3,8 @@
 // src/index.ts
 import { Command } from "commander";
 import * as crypto4 from "crypto";
-import * as os6 from "os";
-import * as path7 from "path";
+import * as os7 from "os";
+import * as path8 from "path";
 
 // package.json
 var package_default = {
@@ -1819,6 +1819,114 @@ async function handleSpawnSession(client, msg, deps) {
   }
 }
 
+// src/memory-handler.ts
+import { promises as fs6 } from "fs";
+import path6 from "path";
+import os5 from "os";
+var MAX_BODY_BYTES = 256 * 1024;
+function encodeCwdForClaudeProjects(cwd) {
+  return cwd.replace(/\//g, "-");
+}
+function memoryDirFor(cwd) {
+  const encoded = encodeCwdForClaudeProjects(cwd);
+  return path6.join(os5.homedir(), ".claude", "projects", encoded, "memory");
+}
+function sendError(registry, client, msg, reason) {
+  const reply = {
+    type: "MEMORY_LIST",
+    requestId: msg.requestId,
+    sessionId: msg.sessionId,
+    dir: "",
+    files: [],
+    error: reason
+  };
+  registry.send(client.ws, reply);
+}
+async function handleListMemory(client, msg, deps) {
+  const session = deps.sessionManager.getSession(msg.sessionId);
+  if (!session) {
+    sendError(deps.registry, client, msg, "SESSION_NOT_FOUND");
+    return;
+  }
+  const dir = memoryDirFor(session.info.cwd);
+  let entries;
+  try {
+    entries = await fs6.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    const e = err;
+    if (e.code === "ENOENT") {
+      const reply2 = {
+        type: "MEMORY_LIST",
+        requestId: msg.requestId,
+        sessionId: msg.sessionId,
+        dir,
+        files: []
+      };
+      deps.registry.send(client.ws, reply2);
+      return;
+    }
+    logger_default.warn(`memory listing failed for ${dir}: ${e.message}`);
+    sendError(deps.registry, client, msg, `READ_FAILED:${e.code ?? "EUNKNOWN"}`);
+    return;
+  }
+  const files = [];
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    if (!ent.name.endsWith(".md")) continue;
+    try {
+      const stat = await fs6.stat(path6.join(dir, ent.name));
+      files.push({
+        name: ent.name,
+        size: stat.size,
+        modifiedAt: stat.mtimeMs
+      });
+    } catch {
+    }
+  }
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  let bodyEntry;
+  if (msg.fileName) {
+    const safeName = path6.basename(msg.fileName);
+    if (!safeName.endsWith(".md")) {
+      sendError(deps.registry, client, msg, "INVALID_FILENAME");
+      return;
+    }
+    if (!files.some((f) => f.name === safeName)) {
+      sendError(deps.registry, client, msg, "FILE_NOT_FOUND");
+      return;
+    }
+    const fullPath = path6.join(dir, safeName);
+    try {
+      const handle = await fs6.open(fullPath, "r");
+      try {
+        const stat = await handle.stat();
+        const len = Math.min(stat.size, MAX_BODY_BYTES);
+        const buf = Buffer.alloc(len);
+        await handle.read(buf, 0, len, 0);
+        bodyEntry = {
+          name: safeName,
+          content: stat.size > MAX_BODY_BYTES ? buf.toString("utf8") + "\n\n\u2026(truncated)" : buf.toString("utf8")
+        };
+      } finally {
+        await handle.close();
+      }
+    } catch (err) {
+      const e = err;
+      sendError(deps.registry, client, msg, `READ_FAILED:${e.code ?? "EUNKNOWN"}`);
+      return;
+    }
+  }
+  const reply = {
+    type: "MEMORY_LIST",
+    requestId: msg.requestId,
+    sessionId: msg.sessionId,
+    dir,
+    files,
+    ...bodyEntry ? { file: bodyEntry } : {}
+  };
+  deps.registry.send(client.ws, reply);
+}
+
 // src/message-router.ts
 var MessageRouter = class _MessageRouter {
   constructor(deps) {
@@ -1896,6 +2004,12 @@ var MessageRouter = class _MessageRouter {
       case "CONTROL_MESSAGE":
         void this._handleControlMessage(client, typed);
         break;
+      case "LIST_MEMORY":
+        void handleListMemory(client, typed, {
+          sessionManager: this.deps.sessionManager,
+          registry: this.deps.registry
+        });
+        break;
       default: {
         const _exhaustive = typed;
         void _exhaustive;
@@ -1927,6 +2041,8 @@ var MessageRouter = class _MessageRouter {
         return msg.query === void 0 || typeof msg.query === "string" && msg.query.length <= 256;
       case "SPAWN_SESSION":
         return typeof msg.cwd === "string" && msg.cwd.length > 0 && msg.cwd.length <= 4096 && typeof msg.requestId === "string" && msg.requestId.length > 0;
+      case "LIST_MEMORY":
+        return typeof msg.requestId === "string" && msg.requestId.length > 0 && typeof msg.sessionId === "string" && msg.sessionId.length > 0 && (msg.fileName === void 0 || typeof msg.fileName === "string" && msg.fileName.length <= 256);
       case "CONTROL_MESSAGE":
         return typeof msg.sessionId === "string" && msg.sessionId.length > 0 && typeof msg.message === "object" && msg.message !== null;
       default: {
@@ -2320,7 +2436,7 @@ var WsServer = class {
 };
 
 // src/push.ts
-import * as fs6 from "fs";
+import * as fs7 from "fs";
 import * as https from "https";
 import * as crypto3 from "crypto";
 function base64url(buf) {
@@ -2391,8 +2507,8 @@ var PushService = class {
   constructor(serviceAccountPath) {
     const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
     try {
-      if (fs6.existsSync(saPath)) {
-        const stat = fs6.statSync(saPath);
+      if (fs7.existsSync(saPath)) {
+        const stat = fs7.statSync(saPath);
         const looseBits = stat.mode & 63;
         if (looseBits !== 0) {
           const modeStr = (stat.mode & 511).toString(8).padStart(3, "0");
@@ -2400,7 +2516,7 @@ var PushService = class {
             `fcm-service-account.json mode is 0${modeStr} \u2014 readable by group/other. FCM private key should be 0600. Run: chmod 600 ${saPath}`
           );
         }
-        const raw = fs6.readFileSync(saPath, "utf-8");
+        const raw = fs7.readFileSync(saPath, "utf-8");
         this.serviceAccount = JSON.parse(raw);
         logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
       } else {
@@ -2602,21 +2718,21 @@ var Daemon = class {
 };
 
 // src/installer.ts
-import * as fs7 from "fs";
-import * as path6 from "path";
-import * as os5 from "os";
+import * as fs8 from "fs";
+import * as path7 from "path";
+import * as os6 from "os";
 import { execFile as execFile2 } from "child_process";
 import { promisify as promisify2 } from "util";
 var execFileAsync2 = promisify2(execFile2);
 function getServiceDir() {
-  return path6.join(os5.homedir(), ".config", "systemd", "user");
+  return path7.join(os6.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path6.join(getServiceDir(), "walccy.service");
+  return path7.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path6.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path7.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -2639,10 +2755,10 @@ WantedBy=default.target
 async function installSystemdService() {
   const serviceDir = getServiceDir();
   const servicePath = getServicePath();
-  if (!fs7.existsSync(serviceDir)) {
-    fs7.mkdirSync(serviceDir, { recursive: true });
+  if (!fs8.existsSync(serviceDir)) {
+    fs8.mkdirSync(serviceDir, { recursive: true });
   }
-  fs7.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
+  fs8.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
   console.log(`Wrote systemd unit: ${servicePath}`);
   try {
     await execFileAsync2("systemctl", ["--user", "daemon-reload"]);
@@ -2666,8 +2782,8 @@ async function uninstallSystemdService() {
     await execFileAsync2("systemctl", ["--user", "disable", "walccy.service"]);
   } catch {
   }
-  if (fs7.existsSync(servicePath)) {
-    fs7.unlinkSync(servicePath);
+  if (fs8.existsSync(servicePath)) {
+    fs8.unlinkSync(servicePath);
     console.log(`Removed systemd unit: ${servicePath}`);
   } else {
     console.log("No systemd unit file found.");
@@ -2680,7 +2796,7 @@ async function uninstallSystemdService() {
 }
 async function getServiceStatus() {
   const servicePath = getServicePath();
-  if (!fs7.existsSync(servicePath)) {
+  if (!fs8.existsSync(servicePath)) {
     return "not-installed";
   }
   try {
@@ -2801,7 +2917,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os6.hostname();
+  const hostname2 = os7.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -2861,15 +2977,15 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path7.dirname(configPath);
-        const fs8 = await import("fs");
-        if (fs8.existsSync(configDir)) {
-          fs8.rmSync(configDir, { recursive: true, force: true });
+        const configDir = path8.dirname(configPath);
+        const fs9 = await import("fs");
+        if (fs9.existsSync(configDir)) {
+          fs9.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path7.join(os6.homedir(), ".walccy");
-        if (fs8.existsSync(logDir2)) {
-          fs8.rmSync(logDir2, { recursive: true, force: true });
+        const logDir2 = path8.join(os7.homedir(), ".walccy");
+        if (fs9.existsSync(logDir2)) {
+          fs9.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");

@@ -584,6 +584,24 @@ export default function SettingsScreen(): React.ReactElement {
           </>
         )}
 
+        {activeSessionId && (
+          <>
+            <SectionHeader title="Memory" />
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.row}
+                activeOpacity={0.7}
+                onPress={() => router.push('/memory')}
+                accessibilityRole="button"
+                accessibilityLabel="Open memory viewer"
+              >
+                <Text style={styles.rowLabel}>Open Memory Viewer</Text>
+                <Text style={styles.linkText}>›</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+
         {!initMeta && activeSessionId && (
           <>
             <SectionHeader title="Session metadata" />

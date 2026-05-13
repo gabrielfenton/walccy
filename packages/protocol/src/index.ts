@@ -113,6 +113,20 @@ export interface UnsubscribeMessage {
   sessionId: string;
 }
 
+/**
+ * Memory viewer request. Lists markdown files under
+ * `~/.claude/projects/<encoded-cwd>/memory/` for the given session, and
+ * (optionally) returns the contents of one named file in the same response.
+ * Empty `fileName` ⇒ list-only; bodies are omitted to keep the snapshot small.
+ */
+export interface ListMemoryMessage {
+  type: 'LIST_MEMORY';
+  requestId: string;
+  sessionId: string;
+  /** Optional — when set, the file's body is included in the reply. */
+  fileName?: string;
+}
+
 export type ClientMessage =
   | AuthMessage
   | ListSessionsMessage
@@ -122,6 +136,7 @@ export type ClientMessage =
   | RegisterPushTokenMessage
   | ListDirectoriesMessage
   | SpawnSessionMessage
+  | ListMemoryMessage
   | ControlMessageEnvelope;
 
 // Note: session termination is delivered via `ControlMessage` of kind
@@ -216,6 +231,31 @@ export interface SpawnResultMessage {
   error?: string;
 }
 
+export interface MemoryFileEntry {
+  /** Filename, e.g. `walccy_session_lifecycle.md`. */
+  name: string;
+  /** Bytes on disk — display only; do not use for body-allocation. */
+  size: number;
+  /** mtime epoch ms. */
+  modifiedAt: number;
+}
+
+export interface MemoryListMessage {
+  type: 'MEMORY_LIST';
+  requestId: string;
+  sessionId: string;
+  /** Absolute directory the entries were read from. */
+  dir: string;
+  files: MemoryFileEntry[];
+  /** Present iff request specified a `fileName` AND the file existed. */
+  file?: {
+    name: string;
+    content: string;
+  };
+  /** Set on failure — short reason. `files` will be empty when set. */
+  error?: string;
+}
+
 export type ServerMessage =
   | AuthOkMessage
   | AuthFailMessage
@@ -228,7 +268,8 @@ export type ServerMessage =
   | PongMessage
   | ErrorMessage
   | DirectoryListMessage
-  | SpawnResultMessage;
+  | SpawnResultMessage
+  | MemoryListMessage;
 
 // ──────────────────────────────────────────────
 // Re-exports

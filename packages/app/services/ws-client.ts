@@ -34,6 +34,7 @@ import type {
   PermissionMode,
   EffortLevel,
   SpawnSessionMessage,
+  MemoryListMessage,
 } from '@walccy/protocol';
 import { PendingRequests } from './ws/PendingRequests';
 import { ReconnectController } from './ws/ReconnectController';
@@ -90,6 +91,7 @@ class WsClient {
 
   private pendingSpawns = new PendingRequests<string>();
   private pendingDirectoryListing = new PendingRequests<DirectoryEntry[]>();
+  private pendingMemory = new PendingRequests<MemoryListMessage>();
 
   private reconnect: ReconnectController;
   private ping: PingWatchdog;
@@ -308,6 +310,25 @@ class WsClient {
     return promise;
   }
 
+  listMemory(
+    sessionId: string,
+    fileName?: string,
+    timeoutMs = 8000,
+  ): Promise<MemoryListMessage> {
+    const requestId = uuid();
+    const { promise } = this.pendingMemory.send<MemoryListMessage>({
+      requestId,
+      timeoutMs,
+    });
+    this.send({
+      type: 'LIST_MEMORY',
+      requestId,
+      sessionId,
+      ...(fileName ? { fileName } : {}),
+    });
+    return promise;
+  }
+
   spawnSession(
     cwd: string,
     params: SpawnSessionParams = {},
@@ -519,6 +540,13 @@ class WsClient {
 
       case 'DIRECTORY_LIST': {
         this.pendingDirectoryListing.resolve(DIRECTORY_LIST_KEY, msg.directories);
+        break;
+      }
+
+      case 'MEMORY_LIST': {
+        // Always resolve (even on error) so the caller sees the reason in
+        // the `error` field rather than timing out.
+        this.pendingMemory.resolve(msg.requestId, msg);
         break;
       }
 
