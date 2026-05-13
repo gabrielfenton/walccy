@@ -16,9 +16,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import Markdown from 'react-native-markdown-display';
 import { useSessionsStore } from '../stores/sessions.store';
+import { useConnectionStore } from '../stores/connection.store';
 import { wsClient } from '../services/ws-client';
 import { Colors } from '../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../constants/typography';
@@ -31,7 +32,18 @@ function formatBytes(n: number): string {
 }
 
 export default function MemoryScreen(): React.ReactElement {
-  const activeSessionId = useSessionsStore((s) => s.activeSessionId);
+  // Allow `walccy://memory?sessionId=<id>` deep-links to pick a session even
+  // before the user has navigated into the terminal tab.
+  const params = useLocalSearchParams<{ sessionId?: string }>();
+  const storeActive = useSessionsStore((s) => s.activeSessionId);
+  const activeSessionId =
+    typeof params.sessionId === 'string' && params.sessionId.length > 0
+      ? params.sessionId
+      : storeActive;
+  // ws-client.send() silently drops messages when the socket isn't OPEN.
+  // Defer the LIST_MEMORY round-trip until the connection settles so the
+  // first deep-link mount after a cold start doesn't time out.
+  const connectionStatus = useConnectionStore((s) => s.status);
   const [files, setFiles] = useState<MemoryFileEntry[]>([]);
   const [dir, setDir] = useState<string>('');
   const [listError, setListError] = useState<string | null>(null);
@@ -63,8 +75,9 @@ export default function MemoryScreen(): React.ReactElement {
   }, [activeSessionId]);
 
   useEffect(() => {
+    if (connectionStatus !== 'connected') return;
     void refreshList();
-  }, [refreshList]);
+  }, [refreshList, connectionStatus]);
 
   const loadFile = useCallback(
     async (name: string) => {
