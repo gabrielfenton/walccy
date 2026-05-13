@@ -14,6 +14,7 @@ import {
   FlatList,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -66,6 +67,10 @@ export function NewSessionSheet({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [spawningPath, setSpawningPath] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
+  const [worktreeName, setWorktreeName] = useState('');
+  const [resumeSessionId, setResumeSessionId] = useState('');
 
   // Reset transient state when the sheet closes
   useEffect(() => {
@@ -73,6 +78,10 @@ export function NewSessionSheet({
       setQuery('');
       setError(null);
       setSpawningPath(null);
+      setAdvancedOpen(false);
+      setWorktreeEnabled(false);
+      setWorktreeName('');
+      setResumeSessionId('');
     }
   }, [isVisible]);
 
@@ -108,10 +117,19 @@ export function NewSessionSheet({
       try {
         const { defaultModel, defaultEffortLevel, defaultOutputStyle } =
           useSettingsStore.getState();
+        const trimmedWorktree = worktreeName.trim();
+        const trimmedResume = resumeSessionId.trim();
+        const worktreeValue: string | boolean | undefined = !worktreeEnabled
+          ? undefined
+          : trimmedWorktree.length > 0
+            ? trimmedWorktree
+            : true;
         const sessionId = await wsClient.spawnSession(path, {
           ...(defaultModel ? { model: defaultModel } : {}),
           effortLevel: defaultEffortLevel,
           outputStyle: defaultOutputStyle,
+          ...(worktreeValue !== undefined ? { worktree: worktreeValue } : {}),
+          ...(trimmedResume ? { resumeSessionId: trimmedResume } : {}),
         });
         onSpawned(sessionId);
         onClose();
@@ -120,7 +138,7 @@ export function NewSessionSheet({
         setSpawningPath(null);
       }
     },
-    [onSpawned, onClose],
+    [onSpawned, onClose, worktreeEnabled, worktreeName, resumeSessionId],
   );
 
   // ── Filter + group ────────────────────────────
@@ -283,6 +301,77 @@ export function NewSessionSheet({
         }}
       />
 
+      <View style={styles.advanced}>
+        <TouchableOpacity
+          onPress={() => setAdvancedOpen((v) => !v)}
+          activeOpacity={0.75}
+          style={styles.advancedToggle}
+          accessibilityRole="button"
+          accessibilityLabel="Advanced spawn options"
+          accessibilityState={{ expanded: advancedOpen }}
+        >
+          <Text style={styles.advancedToggleText}>
+            {advancedOpen ? '▾' : '▸'} Advanced
+          </Text>
+          {(worktreeEnabled || resumeSessionId.trim().length > 0) && (
+            <View style={styles.advancedDot} />
+          )}
+        </TouchableOpacity>
+
+        {advancedOpen && (
+          <View style={styles.advancedBody}>
+            <View style={styles.advancedRow}>
+              <TouchableOpacity
+                onPress={() => setWorktreeEnabled((v) => !v)}
+                activeOpacity={0.75}
+                style={styles.checkbox}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: worktreeEnabled }}
+                accessibilityLabel="Spawn in a worktree"
+              >
+                <View
+                  style={[
+                    styles.checkboxBox,
+                    worktreeEnabled && styles.checkboxBoxOn,
+                  ]}
+                >
+                  {worktreeEnabled && (
+                    <Text style={styles.checkboxGlyph}>✓</Text>
+                  )}
+                </View>
+                <Text style={styles.checkboxLabel}>Worktree</Text>
+              </TouchableOpacity>
+              <TextInput
+                style={[
+                  styles.advancedInput,
+                  !worktreeEnabled && styles.advancedInputDisabled,
+                ]}
+                value={worktreeName}
+                onChangeText={setWorktreeName}
+                editable={worktreeEnabled}
+                placeholder="branch / name (optional)"
+                placeholderTextColor={Colors.textSecondary}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.advancedRow}>
+              <Text style={styles.advancedLabel}>Resume</Text>
+              <TextInput
+                style={styles.advancedInput}
+                value={resumeSessionId}
+                onChangeText={setResumeSessionId}
+                placeholder="prior session id (optional)"
+                placeholderTextColor={Colors.textSecondary}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+            </View>
+          </View>
+        )}
+      </View>
+
       {error && spawningPath === null ? (
         <View style={styles.errorBanner}>
           <Text style={styles.errorBannerText}>{error}</Text>
@@ -308,6 +397,95 @@ export function NewSessionSheet({
 // ──────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  advanced: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: 4,
+    paddingBottom: 6,
+  },
+  advancedToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    gap: 6,
+  },
+  advancedToggleText: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: FontWeight.semiBold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  advancedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.accent,
+  },
+  advancedBody: {
+    paddingTop: 4,
+    gap: 8,
+  },
+  advancedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  advancedLabel: {
+    color: Colors.textPrimary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: FontWeight.medium,
+    width: 86,
+  },
+  advancedInput: {
+    flex: 1,
+    backgroundColor: Colors.surfaceHigh,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    color: Colors.textPrimary,
+    fontFamily: FontFamily.mono,
+    fontSize: FontSize.caption,
+  },
+  advancedInputDisabled: {
+    opacity: 0.4,
+  },
+  checkbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    width: 86,
+  },
+  checkboxBox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+  },
+  checkboxBoxOn: {
+    borderColor: Colors.accent,
+    backgroundColor: Colors.accent + '33',
+  },
+  checkboxGlyph: {
+    color: Colors.accent,
+    fontFamily: FontFamily.ui,
+    fontSize: 12,
+    fontWeight: FontWeight.semiBold,
+  },
+  checkboxLabel: {
+    color: Colors.textPrimary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: FontWeight.medium,
+  },
+
   errorBanner: {
     backgroundColor: Tint.dangerWeak,
     borderLeftWidth: 3,
