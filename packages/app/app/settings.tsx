@@ -18,6 +18,8 @@ import { router } from 'expo-router';
 import { useShallow } from 'zustand/react/shallow';
 import { useSettingsStore } from '../stores/settings.store';
 import { useConnectionStore } from '../stores/connection.store';
+import { useSessionsStore } from '../stores/sessions.store';
+import { useInitMetadataStore } from '../stores/init-metadata.store';
 import { wsClient } from '../services/ws-client';
 import { Colors } from '../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../constants/typography';
@@ -189,6 +191,30 @@ function ScrollbackPicker({ value, onChange }: ScrollbackPickerProps): React.Rea
 }
 
 // ──────────────────────────────────────────────
+// MCP status pill
+// ──────────────────────────────────────────────
+
+const MCP_STATUS_STYLE: Record<
+  string,
+  { bg: string; fg: string; label: string }
+> = {
+  connected:    { bg: Colors.accentGreen + '22', fg: Colors.accentGreen, label: 'connected' },
+  failed:       { bg: Colors.accentRed + '22',   fg: Colors.accentRed,   label: 'failed'    },
+  'needs-auth': { bg: Colors.accentAmber + '22', fg: Colors.accentAmber, label: 'auth'      },
+  pending:      { bg: Colors.surfaceHigh,        fg: Colors.textSecondary, label: 'pending' },
+  disabled:     { bg: Colors.surfaceHigh,        fg: Colors.textSecondary, label: 'off'     },
+};
+
+function McpStatusPill({ status }: { status: string }): React.ReactElement {
+  const cfg = MCP_STATUS_STYLE[status] ?? MCP_STATUS_STYLE.pending!;
+  return (
+    <View style={[styles.mcpPill, { backgroundColor: cfg.bg }]}>
+      <Text style={[styles.mcpPillText, { color: cfg.fg }]}>{cfg.label}</Text>
+    </View>
+  );
+}
+
+// ──────────────────────────────────────────────
 // Generic chip picker (used for model/effort/output style)
 // ──────────────────────────────────────────────
 
@@ -285,6 +311,11 @@ export default function SettingsScreen(): React.ReactElement {
       defaultOutputStyle: s.defaultOutputStyle,
       updateSettings: s.updateSettings,
     }))
+  );
+
+  const activeSessionId = useSessionsStore((s) => s.activeSessionId);
+  const initMeta = useInitMetadataStore((s) =>
+    activeSessionId ? s.byId[activeSessionId] ?? null : null,
   );
 
   const { daemonHost, daemonVersion } = useConnectionStore(
@@ -452,6 +483,119 @@ export default function SettingsScreen(): React.ReactElement {
             </Text>
           </View>
         </View>
+
+        {/* ── Session metadata (read-only from init) ───────── */}
+        {initMeta && (
+          <>
+            {initMeta.agents.length > 0 && (
+              <>
+                <SectionHeader title={`Agents · ${initMeta.agents.length}`} />
+                <View style={styles.card}>
+                  {initMeta.agents.map((a, i) => (
+                    <View
+                      key={a.name}
+                      style={[
+                        styles.metaRow,
+                        i < initMeta.agents.length - 1 && styles.rowBorder,
+                      ]}
+                    >
+                      <Text style={styles.metaPrimary}>{a.name}</Text>
+                      {a.description ? (
+                        <Text style={styles.metaSecondary} numberOfLines={2}>
+                          {a.description}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+
+            {initMeta.mcpServers.length > 0 && (
+              <>
+                <SectionHeader title={`MCP Servers · ${initMeta.mcpServers.length}`} />
+                <View style={styles.card}>
+                  {initMeta.mcpServers.map((m, i) => (
+                    <View
+                      key={m.name}
+                      style={[
+                        styles.metaRow,
+                        i < initMeta.mcpServers.length - 1 && styles.rowBorder,
+                      ]}
+                    >
+                      <View style={styles.metaHead}>
+                        <Text style={styles.metaPrimary}>{m.name}</Text>
+                        <McpStatusPill status={m.status} />
+                      </View>
+                      {m.error ? (
+                        <Text
+                          style={[styles.metaSecondary, { color: Colors.accentRed }]}
+                          numberOfLines={2}
+                        >
+                          {m.error}
+                        </Text>
+                      ) : m.serverInfo ? (
+                        <Text style={styles.metaSecondary}>
+                          {m.serverInfo.name} · v{m.serverInfo.version}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+
+            {initMeta.plugins.length > 0 && (
+              <>
+                <SectionHeader title={`Plugins · ${initMeta.plugins.length}`} />
+                <View style={styles.card}>
+                  {initMeta.plugins.map((p, i) => (
+                    <View
+                      key={p.name}
+                      style={[
+                        styles.metaRow,
+                        i < initMeta.plugins.length - 1 && styles.rowBorder,
+                      ]}
+                    >
+                      <Text style={styles.metaPrimary}>{p.name}</Text>
+                      <Text style={styles.metaSecondary} numberOfLines={1}>
+                        {p.path}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+
+            {initMeta.skills.length > 0 && (
+              <>
+                <SectionHeader title={`Skills · ${initMeta.skills.length}`} />
+                <View style={styles.card}>
+                  <View style={styles.skillsWrap}>
+                    {initMeta.skills.map((s) => (
+                      <View key={s} style={styles.skillChip}>
+                        <Text style={styles.skillChipText}>{s}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </>
+            )}
+          </>
+        )}
+
+        {!initMeta && activeSessionId && (
+          <>
+            <SectionHeader title="Session metadata" />
+            <View style={styles.card}>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaSecondary}>
+                  Waiting for session init event…
+                </Text>
+              </View>
+            </View>
+          </>
+        )}
 
         {/* ── About ───────────────────────────── */}
         <SectionHeader title="About" />
@@ -675,6 +819,62 @@ const styles = StyleSheet.create({
   fontOptionTextActive: {
     color: Colors.accent,
     fontWeight: FontWeight.semiBold,
+  },
+
+  // ── Session metadata rows ─────────────────
+
+  metaRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  metaHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  metaPrimary: {
+    color: Colors.textPrimary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.body,
+    fontWeight: FontWeight.medium,
+  },
+  metaSecondary: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    marginTop: 2,
+  },
+  mcpPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  mcpPillText: {
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: FontWeight.semiBold,
+    textTransform: 'lowercase',
+  },
+  skillsWrap: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  skillChip: {
+    backgroundColor: Colors.surfaceHigh,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  skillChipText: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.mono,
+    fontSize: FontSize.caption,
   },
 
   // ── Disconnect button ─────────────────────

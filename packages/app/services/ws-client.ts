@@ -12,6 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { connectionStore } from '../stores/connection.store';
 import { sessionsStore } from '../stores/sessions.store';
 import { messagesStore } from '../stores/messages.store';
+import { initMetadataStore } from '../stores/init-metadata.store';
 import {
   WS_RECONNECT_DELAYS,
   WS_RECONNECT_JITTER,
@@ -460,6 +461,7 @@ class WsClient {
       case 'SESSION_REMOVED': {
         sessionsStore.getState().removeSession(msg.sessionId);
         messagesStore.getState().clear(msg.sessionId);
+        initMetadataStore.getState().clear(msg.sessionId);
         this.lastEventIndex.delete(msg.sessionId);
         break;
       }
@@ -471,6 +473,14 @@ class WsClient {
           msg.totalEvents,
           msg.firstAvailableEventIndex
         );
+        // Re-hydrate init metadata from history (e.g. on reconnect after the
+        // live init event has already left our local stream).
+        for (const e of msg.events) {
+          if (e.kind === 'init') {
+            initMetadataStore.getState().set(msg.sessionId, e);
+            break;
+          }
+        }
         // History events came from the ring buffer (which is index-tracked
         // on the daemon side). The HISTORY envelope doesn't carry per-event
         // indices, so we trust the daemon's totalEvents - 1 as the highest
@@ -485,6 +495,9 @@ class WsClient {
         messagesStore
           .getState()
           .applyEvent(msg.sessionId, msg.event, msg.eventIndex);
+        if (msg.event.kind === 'init') {
+          initMetadataStore.getState().set(msg.sessionId, msg.event);
+        }
         const prev = this.lastEventIndex.get(msg.sessionId) ?? -1;
         if (msg.eventIndex > prev) {
           this.lastEventIndex.set(msg.sessionId, msg.eventIndex);
