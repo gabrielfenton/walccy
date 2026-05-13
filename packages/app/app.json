@@ -33,6 +33,13 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Walccy needs access to your photos to attach images to chat.",
+          "cameraPermission": "Walccy needs camera access to attach photos to chat."
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/notification-icon.png",
