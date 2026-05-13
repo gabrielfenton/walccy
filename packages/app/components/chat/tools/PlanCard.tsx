@@ -2,14 +2,14 @@
 // PlanCard — interactive card for the SDK ExitPlanMode tool
 // ──────────────────────────────────────────────
 
-import React, { memo, useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardHeaderData } from './ToolCard';
-import { firstLine, resultToText, truncate } from './cardFormat';
+import { firstLine, isSafeLink, resultToText, stripFormatChars, truncate } from './cardFormat';
 import { wsClient } from '../../../services/ws-client';
 
 interface PlanCardProps {
@@ -20,7 +20,7 @@ interface PlanCardProps {
 function readPlan(input: unknown): string {
   if (input == null || typeof input !== 'object') return '';
   const p = (input as { plan?: unknown }).plan;
-  return typeof p === 'string' ? p : '';
+  return typeof p === 'string' ? stripFormatChars(p) : '';
 }
 
 function PlanCardBase({ entry, sessionId }: PlanCardProps): React.ReactElement {
@@ -28,6 +28,15 @@ function PlanCardBase({ entry, sessionId }: PlanCardProps): React.ReactElement {
   const [decided, setDecided] = useState<'accepted' | 'rejected' | null>(null);
 
   const onToggle = useCallback(() => setExpanded((v) => !v), []);
+
+  // The reducer replaces a tool entry on repeat tool_use (SDK retry).
+  // When that happens entry.state flips back to 'running' — reset local
+  // decision state so the user can decide again on the new plan.
+  useEffect(() => {
+    if (entry.state === 'running' && decided !== null) {
+      setDecided(null);
+    }
+  }, [entry.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const plan = useMemo(() => readPlan(entry.input), [entry.input]);
 
@@ -42,6 +51,56 @@ function PlanCardBase({ entry, sessionId }: PlanCardProps): React.ReactElement {
     wsClient.planReject(sessionId, entry.toolUseId);
     setDecided('rejected');
   }, [sessionId, entry.toolUseId]);
+
+  // Hold-to-accept: 600ms hold animates an overlay fill from 0→100% width.
+  // On press-out before completion we cancel and snap back to 0. On completion
+  // (animation `finished === true`) we fire onAccept. Two Animated.Values so
+  // the sticky-top and body Accept buttons animate independently.
+  const HOLD_MS = 600;
+  const holdTopAnim = useRef(new Animated.Value(0)).current;
+  const holdBottomAnim = useRef(new Animated.Value(0)).current;
+  const holdTopRef = useRef<Animated.CompositeAnimation | null>(null);
+  const holdBottomRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  const startHold = useCallback(
+    (which: 'top' | 'bottom') => {
+      const val = which === 'top' ? holdTopAnim : holdBottomAnim;
+      const animRef = which === 'top' ? holdTopRef : holdBottomRef;
+      val.setValue(0);
+      const anim = Animated.timing(val, {
+        toValue: 1,
+        duration: HOLD_MS,
+        useNativeDriver: false,
+      });
+      animRef.current = anim;
+      anim.start(({ finished }) => {
+        if (finished) onAccept();
+      });
+    },
+    [holdTopAnim, holdBottomAnim, onAccept],
+  );
+
+  const cancelHold = useCallback(
+    (which: 'top' | 'bottom') => {
+      const val = which === 'top' ? holdTopAnim : holdBottomAnim;
+      const animRef = which === 'top' ? holdTopRef : holdBottomRef;
+      if (animRef.current) {
+        animRef.current.stop();
+        animRef.current = null;
+      }
+      val.setValue(0);
+    },
+    [holdTopAnim, holdBottomAnim],
+  );
+
+  const fillWidthTop = holdTopAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
+  const fillWidthBottom = holdBottomAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
 
   const header = useMemo<ToolCardHeaderData>(() => {
     let errorSummary: string | undefined;
@@ -58,9 +117,16 @@ function PlanCardBase({ entry, sessionId }: PlanCardProps): React.ReactElement {
   const showButtons = decided === null && entry.state === 'running';
   const showStatusRow = !showButtons;
 
-  let statusKind: 'accepted' | 'rejected' | null = null;
-  if (decided === 'accepted' || entry.state === 'complete') statusKind = 'accepted';
-  else if (decided === 'rejected' || entry.state === 'error') statusKind = 'rejected';
+  // Disambiguate user-rejection from tool error. The SDK never tells us "user
+  // rejected" — the daemon just sends plan_reject; the tool may then complete
+  // (because the model handled rejection) or fail for unrelated reasons. So
+  // trust `decided` first; only fall back to entry.state when the user hasn't
+  // decided locally.
+  let statusKind: 'accepted' | 'rejected' | 'failed' | null = null;
+  if (decided === 'accepted') statusKind = 'accepted';
+  else if (decided === 'rejected') statusKind = 'rejected';
+  else if (entry.state === 'complete') statusKind = 'accepted';
+  else if (entry.state === 'error') statusKind = 'failed';
 
   return (
     <ToolCard
@@ -71,19 +137,10 @@ function PlanCardBase({ entry, sessionId }: PlanCardProps): React.ReactElement {
       onToggleExpand={onToggle}
     >
       <View>
-        <Text style={styles.label}>plan</Text>
-        {plan.length === 0 ? (
-          <Text style={styles.emptyPlan}>(empty plan)</Text>
-        ) : (
-          <ScrollView style={styles.planScroll} nestedScrollEnabled>
-            <Markdown style={markdownStyles}>{plan}</Markdown>
-          </ScrollView>
-        )}
-
         {showButtons ? (
-          <View style={styles.buttonRow}>
+          <View style={styles.stickyRow}>
             <TouchableOpacity
-              style={styles.rejectBtn}
+              style={styles.stickyRejectBtn}
               onPress={onReject}
               activeOpacity={0.75}
               accessibilityRole="button"
@@ -92,14 +149,61 @@ function PlanCardBase({ entry, sessionId }: PlanCardProps): React.ReactElement {
               <Text style={styles.rejectText}>Reject</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.acceptBtn}
-              onPress={onAccept}
-              activeOpacity={0.85}
+              style={styles.stickyAcceptBtn}
+              onPressIn={() => startHold('top')}
+              onPressOut={() => cancelHold('top')}
+              activeOpacity={1}
               accessibilityRole="button"
-              accessibilityLabel="Accept plan"
+              accessibilityLabel="Hold to accept plan"
             >
+              <Animated.View
+                style={[styles.holdFill, { width: fillWidthTop }]}
+                pointerEvents="none"
+              />
               <Text style={styles.acceptText}>Accept</Text>
             </TouchableOpacity>
+          </View>
+        ) : null}
+
+        <Text style={styles.label}>plan</Text>
+        {plan.length === 0 ? (
+          <Text style={styles.emptyPlan}>(empty plan)</Text>
+        ) : (
+          <ScrollView style={styles.planScroll} nestedScrollEnabled>
+            <Markdown style={markdownStyles} onLinkPress={(url: string) => isSafeLink(url)}>
+              {plan}
+            </Markdown>
+          </ScrollView>
+        )}
+
+        {showButtons ? (
+          <View>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity
+                style={styles.rejectBtn}
+                onPress={onReject}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel="Reject plan"
+              >
+                <Text style={styles.rejectText}>Reject</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.acceptBtn}
+                onPressIn={() => startHold('bottom')}
+                onPressOut={() => cancelHold('bottom')}
+                activeOpacity={1}
+                accessibilityRole="button"
+                accessibilityLabel="Hold to accept plan"
+              >
+                <Animated.View
+                  style={[styles.holdFill, { width: fillWidthBottom }]}
+                  pointerEvents="none"
+                />
+                <Text style={styles.acceptText}>Accept</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.holdHint}>Hold to accept</Text>
           </View>
         ) : null}
 
@@ -111,6 +215,11 @@ function PlanCardBase({ entry, sessionId }: PlanCardProps): React.ReactElement {
         {showStatusRow && statusKind === 'rejected' ? (
           <View style={styles.statusRow}>
             <Text style={styles.statusRejected}>✗ Rejected</Text>
+          </View>
+        ) : null}
+        {showStatusRow && statusKind === 'failed' ? (
+          <View style={styles.statusRow}>
+            <Text style={styles.statusFailed}>! Plan failed</Text>
           </View>
         ) : null}
       </View>
@@ -170,6 +279,53 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
+    overflow: 'hidden',
+  },
+  // Sticky top decision row — thinner than the bottom row, same colors.
+  stickyRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  stickyRejectBtn: {
+    flex: 1,
+    minHeight: 44,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.surfaceHigh,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.accentRed + '88',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  stickyAcceptBtn: {
+    flex: 1,
+    minHeight: 44,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.accentGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    overflow: 'hidden',
+  },
+  // Overlay rendered behind the button label; width animates 0→100%.
+  // Uses a darker green tint so progress is visible against the green button.
+  holdFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: '#00000033',
+  },
+  holdHint: {
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontStyle: 'italic',
+    color: Colors.textSecondary,
+    textAlign: 'right',
+    marginTop: 4,
   },
   acceptText: {
     fontFamily: FontFamily.ui,
@@ -192,6 +348,12 @@ const styles = StyleSheet.create({
     fontSize: FontSize.body,
     fontWeight: FontWeight.bold,
     color: Colors.accentRed,
+  },
+  statusFailed: {
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.body,
+    fontWeight: FontWeight.bold,
+    color: Colors.accentAmber,
   },
 });
 

@@ -44,3 +44,21 @@ export function firstLine(s: string): string {
   const i = s.indexOf('\n');
   return i >= 0 ? s.slice(0, i) : s;
 }
+
+/**
+ * Strip Unicode Format (Cf) chars — RTL/LRO/PDF marks, ZWJ, ZWNJ, BOMs.
+ * They can flip the visual order of model-controlled labels so the user
+ * sees text different from what's sent back to the daemon.
+ */
+export function stripFormatChars(s: string): string {
+  return s.replace(/\p{Cf}/gu, '');
+}
+
+/**
+ * Link-scheme allowlist for markdown-rendered model output.
+ * Returning false from `onLinkPress` suppresses Linking.openURL — this
+ * prevents `[x](myapp://…)`, `tel:`, `file:`, etc. deep-link auto-open.
+ */
+export function isSafeLink(url: string): boolean {
+  return /^https?:\/\//i.test(url) || /^mailto:/i.test(url);
+}

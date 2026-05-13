@@ -235,6 +235,33 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'tool_use': {
+      // SDK retries (and daemon reverts after rejection) can re-emit a
+      // tool_use with the same toolUseId. Replace the existing entry in
+      // place so we don't accumulate duplicate cards. We preserve `id` for
+      // React.memo / key stability and reset state back to 'running',
+      // clearing prior result/structured payloads.
+      //
+      // Note: cards (F19 QuestionCard, F20 PlanCard) carry their own local
+      // optimistic state (e.g. `submitted`, `decided`). When this reducer
+      // resets state back to 'running' for the same toolUseId, the card's
+      // local state does NOT reset automatically — that is a card-side
+      // concern (it needs a useEffect keyed on state transitions). The
+      // reducer can only correct the shared/observed entry shape.
+      const existingIdx = findToolIdxByUseId(buf.entries, event.toolUseId);
+      if (existingIdx >= 0) {
+        const prev = buf.entries[existingIdx] as ChatEntryTool;
+        buf.entries[existingIdx] = {
+          ...prev,
+          parentToolUseId: event.parentToolUseId,
+          toolName: event.name,
+          input: event.input,
+          state: 'running',
+          result: undefined,
+          structured: undefined,
+          // keep id, toolUseId, timestamp
+        };
+        return;
+      }
       buf.entries.push({
         kind: 'tool',
         id: uuid(),
@@ -248,6 +275,21 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
       return;
     }
     case 'tool_result': {
+      // Card-side-only concerns (NOT fixable here — documented for the
+      // F19/F20 review pass):
+      //   * The SDK never tells us "the user rejected" — the daemon sends
+      //     `plan_reject` to itself and produces no distinct event. So
+      //     state='error' here conflates "tool errored" with "user rejected
+      //     the plan". F20 PlanCard must disambiguate via its own local
+      //     `decided` state, NOT by reading entry.state alone.
+      //   * F19 QuestionCard receiving `questions: []` is malformed input
+      //     from the model. The reducer can't reliably distinguish a valid
+      //     empty-question payload from a malformed one without coupling to
+      //     tool-specific schemas. Validation belongs in the card.
+      //   * F19/F20 card-local `submitted`/`decided` flags don't auto-reset
+      //     when this entry transitions back to 'running' on a repeat
+      //     tool_use (see the 'tool_use' case above). Cards need their own
+      //     useEffect keyed on `entry.state` to reset.
       const idx = findToolIdxByUseId(buf.entries, event.toolUseId);
       if (idx >= 0) {
         const prev = buf.entries[idx] as ChatEntryTool;

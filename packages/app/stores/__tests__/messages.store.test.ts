@@ -280,6 +280,91 @@ describe('messages.store reducer', () => {
     expect((entries[entries.length - 1] as any).toolUseId).toBe('T-' + (N - 1));
   });
 
+  // ── 10. Repeat tool_use with same toolUseId replaces existing entry ──
+  it('tool_use with an existing toolUseId REPLACES the entry (not append)', async () => {
+    const store = await freshStore();
+    apply(store, ev.toolUse('Tdup', 'Bash', { cmd: 'first' }));
+    const firstEntries = getEntries(store);
+    expect(firstEntries).toHaveLength(1);
+    const firstId = (firstEntries[0] as any).id;
+    const firstTimestamp = (firstEntries[0] as any).timestamp;
+
+    // Land a result so state moves to 'complete' with payload.
+    apply(store, ev.toolResult('Tdup', 'done', false));
+    const midEntries = getEntries(store);
+    expect(midEntries).toHaveLength(1);
+    expect((midEntries[0] as any).state).toBe('complete');
+    expect((midEntries[0] as any).result).toBe('done');
+
+    // Daemon/SDK re-emits tool_use with the SAME toolUseId (retry / revert).
+    apply(store, ev.toolUse('Tdup', 'Bash', { cmd: 'second' }));
+    const afterEntries = getEntries(store);
+
+    // No duplicate entry.
+    expect(afterEntries).toHaveLength(1);
+    // Same memo-stable id — React.memo / list keys stay valid.
+    expect((afterEntries[0] as any).id).toBe(firstId);
+    // Timestamp preserved (it's a re-emit of the original tool use).
+    expect((afterEntries[0] as any).timestamp).toBe(firstTimestamp);
+    // State reset to 'running'; result/structured cleared.
+    expect((afterEntries[0] as any).state).toBe('running');
+    expect((afterEntries[0] as any).result).toBeUndefined();
+    expect((afterEntries[0] as any).structured).toBeUndefined();
+    // Latest input wins.
+    expect((afterEntries[0] as any).input).toEqual({ cmd: 'second' });
+  });
+
+  // ── 11. State-machine semantics for cards w/ local optimistic state ──
+  // F19 QuestionCard / F20 PlanCard keep their own `submitted`/`decided`
+  // flags. The reducer can reset the shared entry on a repeat tool_use,
+  // but it CANNOT reach into card-local React state — cards must observe
+  // the running→complete→running transition themselves and reset on the
+  // edge. This test pins down the reducer-observable half of that contract.
+  it("tool_result transitions don't auto-reset card-local optimistic state", async () => {
+    const store = await freshStore();
+
+    // 1. tool_use
+    apply(store, ev.toolUse('TQ', 'ExitPlanMode', { plan: 'v1' }));
+    const e1 = getEntries(store);
+    expect(e1).toHaveLength(1);
+    expect((e1[0] as any).state).toBe('running');
+    const stableId = (e1[0] as any).id;
+
+    // 2. tool_result (not error) — state -> 'complete'
+    apply(store, ev.toolResult('TQ', 'accepted', false));
+    const e2 = getEntries(store);
+    expect(e2).toHaveLength(1);
+    expect((e2[0] as any).state).toBe('complete');
+
+    // 3. Repeat tool_use with the SAME toolUseId (daemon revert / retry).
+    apply(store, ev.toolUse('TQ', 'ExitPlanMode', { plan: 'v2' }));
+    const e3 = getEntries(store);
+
+    // 4. Reducer behavior: same entry index, state reset to 'running',
+    //    result cleared. Cards observing this MUST own their local reset.
+    expect(e3).toHaveLength(1);
+    expect((e3[0] as any).id).toBe(stableId); // not a new entry
+    expect((e3[0] as any).state).toBe('running');
+    expect((e3[0] as any).result).toBeUndefined();
+    expect((e3[0] as any).input).toEqual({ plan: 'v2' });
+  });
+
+  // ── 12. tool_result isError vs user-rejection conflation (documentation) ──
+  // The daemon never emits a distinct "user rejected the plan" event — it
+  // routes the rejection through `plan_reject` and the SDK's next message
+  // surfaces as tool_result with isError=true OR is_error inside content.
+  // This test pins the conflation in place so the F20 card knows it must
+  // distinguish via its own local `decided` flag.
+  it('tool_result isError=true produces state="error" regardless of cause (rejection vs failure)', async () => {
+    const store = await freshStore();
+    apply(store, ev.toolUse('TR', 'ExitPlanMode', { plan: 'p' }));
+    apply(store, ev.toolResult('TR', 'The user doesn\'t want to proceed', true));
+    const tool = getEntries(store).find((e: any) => e.kind === 'tool') as any;
+    // Reducer cannot tell rejection apart from a real tool failure — both
+    // collapse to state='error'. F20 PlanCard must use card-local state.
+    expect(tool.state).toBe('error');
+  });
+
   // ── 9. is_error inside content blocks marks state error ──
   it('tool_result with is_error content block marks state error', async () => {
     const store = await freshStore();

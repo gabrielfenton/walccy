@@ -2,13 +2,13 @@
 // QuestionCard — interactive card for the SDK AskUserQuestion tool
 // ──────────────────────────────────────────────
 
-import React, { memo, useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardHeaderData } from './ToolCard';
-import { firstLine, resultToText, truncate } from './cardFormat';
+import { firstLine, resultToText, stripFormatChars, truncate } from './cardFormat';
 import { FallbackCard } from './FallbackCard';
 import { wsClient } from '../../../services/ws-client';
 
@@ -33,7 +33,7 @@ interface Question {
 function parseQuestions(input: unknown): Question[] | null {
   if (input == null || typeof input !== 'object') return null;
   const raw = (input as { questions?: unknown }).questions;
-  if (!Array.isArray(raw)) return null;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
   const out: Question[] = [];
   for (const q of raw) {
     if (q == null || typeof q !== 'object') return null;
@@ -41,19 +41,28 @@ function parseQuestions(input: unknown): Question[] | null {
     if (typeof qq.question !== 'string') return null;
     if (typeof qq.header !== 'string') return null;
     if (typeof qq.multiSelect !== 'boolean') return null;
-    if (!Array.isArray(qq.options)) return null;
+    if (!Array.isArray(qq.options) || qq.options.length === 0) return null;
     const opts: QuestionOption[] = [];
+    const seenLabels = new Set<string>();
     for (const o of qq.options) {
       if (o == null || typeof o !== 'object') return null;
       const oo = o as Record<string, unknown>;
       if (typeof oo.label !== 'string') return null;
       if (typeof oo.description !== 'string') return null;
+      const cleanLabel = stripFormatChars(oo.label);
+      // Reject empty / duplicate labels — both break Set<string>-keyed selection.
+      if (cleanLabel.length === 0 || seenLabels.has(cleanLabel)) return null;
+      seenLabels.add(cleanLabel);
       const preview = typeof oo.preview === 'string' ? oo.preview : undefined;
-      opts.push({ label: oo.label, description: oo.description, preview });
+      opts.push({
+        label: cleanLabel,
+        description: stripFormatChars(oo.description),
+        preview: preview != null ? stripFormatChars(preview) : undefined,
+      });
     }
     out.push({
-      question: qq.question,
-      header: qq.header,
+      question: stripFormatChars(qq.question),
+      header: stripFormatChars(qq.header),
       multiSelect: qq.multiSelect,
       options: opts,
     });
@@ -65,12 +74,36 @@ function QuestionCardBase({ entry, sessionId }: QuestionCardProps): React.ReactE
   const [expanded, setExpanded] = useState(true);
   const [selections, setSelections] = useState<Record<number, Set<string>>>({});
   const [submitted, setSubmitted] = useState(false);
+  // Per-(question,option) expansion of preview text. Keyed `${q}:${o}` so the
+  // set is stable across renders without a fancy data structure.
+  const [expandedPreviews, setExpandedPreviews] = useState<Set<string>>(() => new Set());
+
+  const togglePreview = useCallback((qIdx: number, oIdx: number) => {
+    const key = `${qIdx}:${oIdx}`;
+    setExpandedPreviews((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   const onToggle = useCallback(() => setExpanded((v) => !v), []);
 
   const questions = useMemo(() => parseQuestions(entry.input), [entry.input]);
 
   const resultText = useMemo(() => resultToText(entry.result), [entry.result]);
+
+  // The reducer now replaces a tool entry on repeat tool_use (SDK retry).
+  // When that happens entry.state flips back to 'running' — reset local
+  // optimistic state so the user can answer again.
+  useEffect(() => {
+    if (entry.state === 'running' && submitted) {
+      setSubmitted(false);
+      setSelections({});
+    }
+    // intentionally only react to state, not submitted
+  }, [entry.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const awaiting = entry.state === 'running' && !submitted;
 
@@ -187,11 +220,13 @@ function QuestionCardBase({ entry, sessionId }: QuestionCardProps): React.ReactE
                     : '○';
                 const interactable = !submitted && entry.state === 'running';
                 const dimUnselectedDescription = showAnsweredStatus && !selected;
-                const showPreview = opt.preview != null && selected;
+                const previewKey = `${i}:${j}`;
+                const previewExpanded = expandedPreviews.has(previewKey);
+                const hasPreview = opt.preview != null && opt.preview.length > 0;
                 return (
                   <TouchableOpacity
                     key={`opt-${i}-${j}`}
-                    style={styles.optionRow}
+                    style={[styles.optionRow, selected && styles.optionRowSelected]}
                     onPress={
                       interactable
                         ? () => toggleOption(i, opt.label, q.multiSelect)
@@ -225,15 +260,26 @@ function QuestionCardBase({ entry, sessionId }: QuestionCardProps): React.ReactE
                           {opt.description}
                         </Text>
                       ) : null}
-                      {showPreview ? (
-                        <>
-                          <Text style={styles.previewLabel}>preview</Text>
-                          <ScrollView style={styles.previewScroll} nestedScrollEnabled>
-                            <Text style={styles.previewText} selectable>
-                              {opt.preview}
+                      {hasPreview ? (
+                        <View style={styles.previewBlock}>
+                          <Text
+                            style={styles.previewText}
+                            numberOfLines={previewExpanded ? undefined : 2}
+                            selectable
+                          >
+                            {opt.preview}
+                          </Text>
+                          <TouchableOpacity
+                            onPress={() => togglePreview(i, j)}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            accessibilityRole="button"
+                            accessibilityLabel={previewExpanded ? 'Show less' : 'Show full preview'}
+                          >
+                            <Text style={styles.previewToggle}>
+                              {previewExpanded ? '[show less]' : '[show full]'}
                             </Text>
-                          </ScrollView>
-                        </>
+                          </TouchableOpacity>
+                        </View>
                       ) : null}
                     </View>
                   </TouchableOpacity>
@@ -307,7 +353,16 @@ const styles = StyleSheet.create({
     gap: 10,
     minHeight: 44,
     paddingVertical: 8,
-    paddingHorizontal: 4,
+    // Reserve 2px for the selected-state left border so text doesn't shift on toggle.
+    paddingLeft: 6,
+    paddingRight: 4,
+    borderLeftWidth: 2,
+    borderLeftColor: 'transparent',
+    borderRadius: 4,
+  },
+  optionRowSelected: {
+    backgroundColor: Colors.accent + '11',
+    borderLeftColor: Colors.accent,
   },
   optionGlyph: {
     fontFamily: FontFamily.mono,
@@ -340,25 +395,21 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginTop: 2,
   },
-  previewLabel: {
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.caption,
-    fontWeight: FontWeight.semiBold,
-    color: Colors.textSecondary,
-    marginTop: 6,
-    marginBottom: 3,
-  },
-  previewScroll: {
-    maxHeight: 200,
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
+  previewBlock: {
+    marginTop: 4,
   },
   previewText: {
-    fontFamily: FontFamily.mono,
-    fontSize: FontSize.body - 2,
-    color: Colors.textPrimary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontStyle: 'italic',
+    color: Colors.textSecondary,
+    lineHeight: FontSize.caption * 1.4,
+  },
+  previewToggle: {
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    color: Colors.accent,
+    marginTop: 2,
   },
   submitRow: {
     marginTop: 14,

@@ -12,6 +12,7 @@ import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
+import { isSafeLink } from './tools/cardFormat';
 
 interface AssistantMessageProps {
   text: string;
@@ -57,7 +58,11 @@ function AssistantMessageBase({
           <Text style={styles.placeholder}>…</Text>
         ) : (
           <View style={styles.inlineWrap}>
-            {text.length > 0 && <Markdown style={mdStyles}>{text}</Markdown>}
+            {text.length > 0 && (
+              <Markdown style={mdStyles} onLinkPress={(url: string) => isSafeLink(url)}>
+                {text}
+              </Markdown>
+            )}
             {streaming && (
               <View style={styles.caretRow}>
                 <Animated.View style={[styles.caret, { opacity }]} />
