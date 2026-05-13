@@ -21,6 +21,7 @@ import { clipboardService } from '../../services/clipboard.service';
 import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import { MessageList } from '../../components/chat/MessageList';
 import { Composer } from '../../components/chat/Composer';
+import { SlashCommandStrip } from '../../components/chat/SlashCommandStrip';
 import { ClipboardPopup } from '../../components/clipboard/ClipboardPopup';
 import { ClipboardBubble } from '../../components/clipboard/ClipboardBubble';
 import { ClipboardHistorySheet } from '../../components/clipboard/ClipboardHistorySheet';
@@ -311,9 +312,12 @@ export default function TerminalSessionScreen(): React.ReactElement {
         }}
       />
 
-      {/* Composer — hidden for read-only external sessions */}
-      {!isReadOnly && !showEmpty && (
-        <Composer sessionId={sessionId ?? ''} />
+      {/* Slash-command quick strip + Composer */}
+      {!isReadOnly && !showEmpty && sessionId && (
+        <>
+          <SlashCommandStrip sessionId={sessionId} />
+          <Composer sessionId={sessionId} />
+        </>
       )}
 
       {/* Clipboard popup — shown on terminal text long-press */}
