@@ -210,10 +210,19 @@ function TurnPlaceholder({
   cost: number;
   stopReason: string | null;
 }): React.ReactElement {
+  // The SDK reports an interrupted turn with no/falsy stopReason or one of
+  // a small family of values. Surface as a distinct visual so a stopped
+  // turn doesn't read identically to "end_turn".
+  const interrupted =
+    stopReason == null ||
+    stopReason === 'interrupted' ||
+    stopReason === 'pause_turn' ||
+    stopReason === 'user_interrupted' ||
+    stopReason === 'cancelled';
   return (
-    <View style={styles.info}>
-      <Text style={styles.infoText}>
-        Turn · ${cost.toFixed(4)} · {stopReason ?? 'unknown'}
+    <View style={interrupted ? [styles.info, styles.turnInterrupted] : styles.info}>
+      <Text style={interrupted ? [styles.infoText, styles.turnInterruptedText] : styles.infoText}>
+        Turn · ${cost.toFixed(4)} · {interrupted ? 'interrupted' : stopReason}
       </Text>
     </View>
   );
@@ -267,6 +276,14 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: Colors.accentAmber,
     paddingLeft: 12,
+  },
+  turnInterrupted: {
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.accentAmber,
+    paddingLeft: 12,
+  },
+  turnInterruptedText: {
+    color: Colors.accentAmber,
   },
   errorRow: {
     backgroundColor: Colors.surface,
