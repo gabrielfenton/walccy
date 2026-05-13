@@ -5,6 +5,7 @@ import { EditCard } from './EditCard';
 import { GlobCard } from './GlobCard';
 import { GrepCard } from './GrepCard';
 import { McpToolCard } from './McpToolCard';
+import { QuestionCard } from './QuestionCard';
 import { ReadCard } from './ReadCard';
 import { SkillCard } from './SkillCard';
 import { TodoCard } from './TodoCard';
@@ -23,5 +24,6 @@ export function registerAllToolCards(): void {
   registerToolCard('TodoWrite', TodoCard);
   registerToolCard('WebFetch', WebFetchCard);
   registerToolCard('WebSearch', WebSearchCard);
+  registerToolCard('AskUserQuestion', QuestionCard);
   registerToolCardPattern((name) => name.startsWith('mcp__'), McpToolCard);
 }
