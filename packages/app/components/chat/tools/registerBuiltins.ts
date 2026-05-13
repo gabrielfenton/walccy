@@ -1,9 +1,10 @@
-import { registerToolCard } from './tool-card-registry';
+import { registerToolCard, registerToolCardPattern } from './tool-card-registry';
 import { AgentCard } from './AgentCard';
 import { BashCard } from './BashCard';
 import { EditCard } from './EditCard';
 import { GlobCard } from './GlobCard';
 import { GrepCard } from './GrepCard';
+import { McpToolCard } from './McpToolCard';
 import { ReadCard } from './ReadCard';
 import { TodoCard } from './TodoCard';
 import { WebFetchCard } from './WebFetchCard';
@@ -20,4 +21,5 @@ export function registerAllToolCards(): void {
   registerToolCard('TodoWrite', TodoCard);
   registerToolCard('WebFetch', WebFetchCard);
   registerToolCard('WebSearch', WebSearchCard);
+  registerToolCardPattern((name) => name.startsWith('mcp__'), McpToolCard);
 }
