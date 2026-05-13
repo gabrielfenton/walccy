@@ -25,6 +25,7 @@ import { FontFamily, FontSize } from '../../constants/typography';
 import { UserBubble } from './UserBubble';
 import { AssistantMessage } from './AssistantMessage';
 import { ThinkingCard } from './ThinkingCard';
+import { PermissionCard } from './PermissionCard';
 import { renderToolCard } from './tools/tool-card-registry';
 
 interface MessageListProps {
@@ -34,6 +35,7 @@ interface MessageListProps {
 function renderEntry(
   { item }: ListRenderItemInfo<ChatEntry>,
   childMap: Map<string, ChatEntryTool[]>,
+  sessionId: string,
 ): React.ReactElement {
   switch (item.kind) {
     case 'user':
@@ -56,7 +58,7 @@ function renderEntry(
       return renderToolCard(item);
     }
     case 'permission_request':
-      return <PermissionPlaceholder toolName={item.toolName} />;
+      return <PermissionCard entry={item} sessionId={sessionId} />;
     case 'turn_summary':
       return <TurnPlaceholder cost={item.cost.total} stopReason={item.stopReason} />;
     case 'error':
@@ -142,8 +144,8 @@ function MessageListBase({ sessionId }: MessageListProps): React.ReactElement {
   }, [visibleEntries.length, atBottom]);
 
   const renderItem = useCallback(
-    (info: ListRenderItemInfo<ChatEntry>) => renderEntry(info, childMap),
-    [childMap],
+    (info: ListRenderItemInfo<ChatEntry>) => renderEntry(info, childMap, sessionId),
+    [childMap, sessionId],
   );
 
   const onScroll = useCallback(
@@ -198,16 +200,6 @@ export const MessageList = memo(MessageListBase);
 // card lands in later features (F7 ThinkingCard, F9..F20 tool cards, F19
 // QuestionCard, F20 PlanCard, F28 rate-limit banner). Keeps data visible
 // during the interim ship without re-writing MessageList each time.
-
-function PermissionPlaceholder({ toolName }: { toolName: string }): React.ReactElement {
-  return (
-    <View style={[styles.info, styles.permission]}>
-      <Text style={[styles.infoLabel, { color: Colors.accentAmber }]}>
-        ? Awaiting decision · {toolName}
-      </Text>
-    </View>
-  );
-}
 
 function TurnPlaceholder({
   cost,

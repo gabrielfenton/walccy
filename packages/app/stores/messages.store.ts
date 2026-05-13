@@ -258,6 +258,17 @@ function applyEvent(buf: MessagesBuffer, event: SessionEvent): void {
           structured: event.structured,
         };
       }
+      // A tool_result implies the matching permission_request (if any) was
+      // approved — the SDK doesn't emit an explicit "permission_resolved"
+      // event for allows. Mark it so the card collapses to the resolved
+      // state instead of lingering as "awaiting decision".
+      const permIdx = findPermRequestIdxByToolUseId(buf.entries, event.toolUseId);
+      if (permIdx >= 0) {
+        const prev = buf.entries[permIdx] as ChatEntryPermissionRequest;
+        if (prev.resolved === undefined) {
+          buf.entries[permIdx] = { ...prev, resolved: 'allowed' };
+        }
+      }
       return;
     }
     case 'permission_request': {
