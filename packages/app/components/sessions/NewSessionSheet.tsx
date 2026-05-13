@@ -18,6 +18,7 @@ import {
   View,
 } from 'react-native';
 import { wsClient } from '../../services/ws-client';
+import { useSettingsStore } from '../../stores/settings.store';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { Spacing } from '../../constants/spacing';
@@ -105,7 +106,13 @@ export function NewSessionSheet({
       setSpawningPath(path);
       setError(null);
       try {
-        const sessionId = await wsClient.spawnSession(path);
+        const { defaultModel, defaultEffortLevel, defaultOutputStyle } =
+          useSettingsStore.getState();
+        const sessionId = await wsClient.spawnSession(path, {
+          ...(defaultModel ? { model: defaultModel } : {}),
+          effortLevel: defaultEffortLevel,
+          outputStyle: defaultOutputStyle,
+        });
         onSpawned(sessionId);
         onClose();
       } catch (err) {

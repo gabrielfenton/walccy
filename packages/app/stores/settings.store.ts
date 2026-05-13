@@ -4,6 +4,7 @@ import { MMKV } from 'react-native-mmkv';
 import * as SecureStore from 'expo-secure-store';
 import { v4 as uuid } from 'uuid';
 import type { MonoFontFamily } from '../constants/typography';
+import type { EffortLevel } from '@walccy/protocol';
 
 // ──────────────────────────────────────────────
 // MMKV storage adapter for Zustand persist
@@ -65,6 +66,12 @@ interface Settings {
   /** When false, system clipboard changes are not added to clipboard history.
    *  Manual / terminal copies are still recorded — the user invoked them. */
   clipboardCaptureSystemContent: boolean;
+  /** Default model alias used when spawning new sessions. Empty = SDK default. */
+  defaultModel: string;
+  /** Default effort level applied at spawn time. */
+  defaultEffortLevel: EffortLevel;
+  /** Default output style applied at spawn time. */
+  defaultOutputStyle: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -80,6 +87,9 @@ const DEFAULT_SETTINGS: Settings = {
   showClipboardPopupOnCopy: true,
   lowPowerMode: false,
   clipboardCaptureSystemContent: true,
+  defaultModel: '',
+  defaultEffortLevel: 'high',
+  defaultOutputStyle: 'default',
 };
 
 interface SettingsStore extends Settings {
@@ -157,6 +167,9 @@ export const useSettingsStore = create<SettingsStore>()(
         if (next.clipboardCaptureSystemContent === undefined) {
           next.clipboardCaptureSystemContent = true;
         }
+        if (next.defaultModel === undefined) next.defaultModel = '';
+        if (next.defaultEffortLevel === undefined) next.defaultEffortLevel = 'high';
+        if (next.defaultOutputStyle === undefined) next.defaultOutputStyle = 'default';
         return next as unknown as SettingsStore;
       },
     }

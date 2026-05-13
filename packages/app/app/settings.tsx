@@ -22,6 +22,7 @@ import { wsClient } from '../services/ws-client';
 import { Colors } from '../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../constants/typography';
 import type { MonoFontFamily } from '../constants/typography';
+import type { EffortLevel } from '@walccy/protocol';
 
 // ──────────────────────────────────────────────
 // Sub-components
@@ -188,6 +189,68 @@ function ScrollbackPicker({ value, onChange }: ScrollbackPickerProps): React.Rea
 }
 
 // ──────────────────────────────────────────────
+// Generic chip picker (used for model/effort/output style)
+// ──────────────────────────────────────────────
+
+interface ChipPickerProps<T extends string> {
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  onChange: (v: T) => void;
+}
+
+function ChipPicker<T extends string>({
+  value,
+  options,
+  onChange,
+}: ChipPickerProps<T>): React.ReactElement {
+  return (
+    <View style={styles.fontPicker}>
+      {options.map((o) => (
+        <TouchableOpacity
+          key={o.value}
+          style={[styles.fontOption, value === o.value && styles.fontOptionActive]}
+          onPress={() => onChange(o.value)}
+          activeOpacity={0.7}
+          accessibilityRole="radio"
+          accessibilityState={{ checked: value === o.value }}
+        >
+          <Text
+            style={[
+              styles.fontOptionText,
+              value === o.value && styles.fontOptionTextActive,
+            ]}
+          >
+            {o.label}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+
+const MODEL_OPTIONS = [
+  { value: '', label: 'Default' },
+  { value: 'claude-opus-4-7', label: 'Opus 4.7' },
+  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+] as const;
+
+const EFFORT_OPTIONS: ReadonlyArray<{ value: EffortLevel; label: string }> = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Med' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'X-High' },
+  { value: 'max', label: 'Max' },
+];
+
+const OUTPUT_STYLE_OPTIONS = [
+  { value: 'default', label: 'Default' },
+  { value: 'concise', label: 'Concise' },
+  { value: 'explanatory', label: 'Explain' },
+  { value: 'learning', label: 'Learn' },
+] as const;
+
+// ──────────────────────────────────────────────
 // Settings Screen
 // ──────────────────────────────────────────────
 
@@ -202,6 +265,9 @@ export default function SettingsScreen(): React.ReactElement {
     vibrationOnWaitingInput,
     showClipboardPopupOnCopy,
     lowPowerMode,
+    defaultModel,
+    defaultEffortLevel,
+    defaultOutputStyle,
     updateSettings,
   } = useSettingsStore(
     useShallow((s) => ({
@@ -214,6 +280,9 @@ export default function SettingsScreen(): React.ReactElement {
       vibrationOnWaitingInput: s.vibrationOnWaitingInput,
       showClipboardPopupOnCopy: s.showClipboardPopupOnCopy,
       lowPowerMode: s.lowPowerMode,
+      defaultModel: s.defaultModel,
+      defaultEffortLevel: s.defaultEffortLevel,
+      defaultOutputStyle: s.defaultOutputStyle,
       updateSettings: s.updateSettings,
     }))
   );
@@ -307,6 +376,37 @@ export default function SettingsScreen(): React.ReactElement {
               onChange={(v) => updateSettings({ scrollbackLines: v })}
             />
           </Row>
+        </View>
+
+        {/* ── Claude ──────────────────────────── */}
+        <SectionHeader title="Claude" />
+        <View style={styles.card}>
+          <Row label="Model">
+            <ChipPicker
+              value={defaultModel}
+              options={MODEL_OPTIONS}
+              onChange={(v) => updateSettings({ defaultModel: v })}
+            />
+          </Row>
+          <Row label="Effort">
+            <ChipPicker
+              value={defaultEffortLevel}
+              options={EFFORT_OPTIONS}
+              onChange={(v) => updateSettings({ defaultEffortLevel: v })}
+            />
+          </Row>
+          <Row label="Output Style" isLast>
+            <ChipPicker
+              value={defaultOutputStyle}
+              options={OUTPUT_STYLE_OPTIONS}
+              onChange={(v) => updateSettings({ defaultOutputStyle: v })}
+            />
+          </Row>
+          <View style={styles.cardFooter}>
+            <Text style={styles.cardFooterText}>
+              Defaults applied to newly spawned sessions. Existing sessions keep the values they were spawned with.
+            </Text>
+          </View>
         </View>
 
         {/* ── Behavior ────────────────────────── */}
