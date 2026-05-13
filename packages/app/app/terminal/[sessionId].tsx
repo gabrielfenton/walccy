@@ -20,6 +20,7 @@ import { wsClient } from '../../services/ws-client';
 import { clipboardService } from '../../services/clipboard.service';
 import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import { MessageList } from '../../components/chat/MessageList';
+import { RateLimitBanner } from '../../components/chat/RateLimitBanner';
 import { Composer } from '../../components/chat/Composer';
 import { SlashCommandStrip } from '../../components/chat/SlashCommandStrip';
 import { ClipboardPopup } from '../../components/clipboard/ClipboardPopup';
@@ -288,6 +289,9 @@ export default function TerminalSessionScreen(): React.ReactElement {
           spawnError={spawnError}
         />
       )}
+
+      {/* Rate-limit banner — only renders when a non-allowed event is live */}
+      {!showEmpty && sessionId && <RateLimitBanner sessionId={sessionId} />}
 
       {/* Main chat area */}
       {showEmpty ? (
