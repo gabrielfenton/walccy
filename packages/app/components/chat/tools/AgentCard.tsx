@@ -4,7 +4,7 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { resultToText, truncate } from './searchHelpers';
+import { firstLine, resultToText, truncate } from './searchHelpers';
 
 interface AgentCardProps {
   entry: ChatEntryTool;
@@ -17,11 +17,6 @@ interface AgentInput {
   isolation?: string;
   model?: string;
   run_in_background?: boolean;
-}
-
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function AgentCardBase({ entry }: AgentCardProps): React.ReactElement {

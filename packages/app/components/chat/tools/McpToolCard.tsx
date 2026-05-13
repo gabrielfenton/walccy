@@ -4,7 +4,7 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { resultToText, truncate } from './searchHelpers';
+import { firstLine, resultToText, truncate } from './searchHelpers';
 import { FallbackCard } from './FallbackCard';
 
 interface McpToolCardProps {
@@ -17,11 +17,6 @@ function parseMcpToolName(name: string): { server: string; tool: string } | null
   const idx = rest.indexOf('__');
   if (idx < 0) return null;
   return { server: rest.slice(0, idx), tool: rest.slice(idx + 2) };
-}
-
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function McpToolCardBase({ entry }: McpToolCardProps): React.ReactElement {

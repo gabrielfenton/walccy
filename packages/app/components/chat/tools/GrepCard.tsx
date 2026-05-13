@@ -4,7 +4,7 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { basenameOf, countMatches, resultToText, truncate } from './searchHelpers';
+import { basenameOf, countMatches, firstLine, resultToText, truncate } from './searchHelpers';
 
 interface GrepCardProps {
   entry: ChatEntryTool;
@@ -29,11 +29,6 @@ const REGEX_HINT = /[\\^$.*+?()[\]{}|]/;
 
 function looksRegex(p: string): boolean {
   return REGEX_HINT.test(p);
-}
-
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function GrepCardBase({ entry }: GrepCardProps): React.ReactElement {

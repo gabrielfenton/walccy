@@ -4,47 +4,45 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { basenameOf, countMatches, firstLine, resultToText, truncate } from './searchHelpers';
+import { firstLine, resultToText, truncate } from './searchHelpers';
 
-interface GlobCardProps {
+interface SkillCardProps {
   entry: ChatEntryTool;
 }
 
-interface GlobInput {
-  pattern?: string;
-  path?: string;
+interface SkillInput {
+  skill?: string;
+  args?: string;
 }
 
-function GlobCardBase({ entry }: GlobCardProps): React.ReactElement {
+function SkillCardBase({ entry }: SkillCardProps): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const onToggle = useCallback(() => setExpanded((v) => !v), []);
 
-  const input = entry.input as GlobInput;
-  const pattern = typeof input.pattern === 'string' ? input.pattern : '';
-  const path = typeof input.path === 'string' ? input.path : '';
+  const input = entry.input as SkillInput;
+  const skill = typeof input.skill === 'string' ? input.skill : '';
+  const args = typeof input.args === 'string' ? input.args : '';
 
-  const text = useMemo(() => resultToText(entry.result), [entry.result]);
-  const fileCount = useMemo(() => countMatches(text, 'content'), [text]);
+  const resultText = useMemo(() => resultToText(entry.result), [entry.result]);
 
   const header = useMemo<ToolCardHeaderData>(() => {
-    const identity = pattern.length > 0 ? truncate(pattern, 24) : undefined;
     const chips: ToolCardChip[] = [];
-    if (entry.state !== 'running') {
-      if (path.length > 0) {
-        chips.push({ text: basenameOf(path), tone: 'neutral', mono: true });
-      }
-      chips.push({
-        text: `${fileCount}`,
-        tone: fileCount > 0 ? 'accent' : 'neutral',
-      });
-    }
     let errorSummary: string | undefined;
     if (entry.state === 'error') {
-      const line = firstLine(resultToText(entry.result)).trim();
+      const line = firstLine(resultText).trim();
       if (line.length > 0) errorSummary = truncate(line, 80);
+    } else {
+      if (skill.length > 0) {
+        chips.push({ text: skill, tone: 'accent', mono: true });
+      }
+      if (args.length > 0) {
+        chips.push({ text: truncate(args, 24), tone: 'neutral' });
+      }
     }
-    return { identity, chips, errorSummary };
-  }, [pattern, path, fileCount, entry.state, entry.result]);
+    return { chips, errorSummary };
+  }, [skill, args, entry.state, resultText]);
+
+  const resultEmpty = resultText.length === 0;
 
   return (
     <ToolCard
@@ -55,23 +53,27 @@ function GlobCardBase({ entry }: GlobCardProps): React.ReactElement {
       onToggleExpand={onToggle}
     >
       <View>
-        <Text style={styles.label}>pattern</Text>
+        <Text style={styles.label}>skill</Text>
         <Text style={styles.mono} selectable>
-          {pattern}
+          {skill}
         </Text>
 
-        <Text style={[styles.label, styles.labelSpaced]}>path</Text>
-        <Text style={styles.mono} selectable>
-          {path.length > 0 ? path : './'}
-        </Text>
+        {args.length > 0 && (
+          <>
+            <Text style={[styles.label, styles.labelSpaced]}>args</Text>
+            <Text style={styles.mono} selectable>
+              {args}
+            </Text>
+          </>
+        )}
 
-        <Text style={[styles.label, styles.labelSpaced]}>files</Text>
-        {text.length === 0 ? (
-          <Text style={styles.empty}>(no matches)</Text>
+        <Text style={[styles.label, styles.labelSpaced]}>output</Text>
+        {resultEmpty && entry.state !== 'running' ? (
+          <Text style={styles.empty}>(empty)</Text>
         ) : (
-          <ScrollView style={styles.scroll} nestedScrollEnabled>
-            <Text style={styles.filesText} selectable>
-              {text}
+          <ScrollView style={styles.resultScroll} nestedScrollEnabled>
+            <Text style={styles.resultText} selectable>
+              {resultText}
             </Text>
           </ScrollView>
         )}
@@ -97,10 +99,10 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     flexWrap: 'wrap',
   },
-  scroll: {
+  resultScroll: {
     maxHeight: 400,
   },
-  filesText: {
+  resultText: {
     fontFamily: FontFamily.mono,
     fontSize: FontSize.body - 2,
     color: Colors.textPrimary,
@@ -113,4 +115,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export const GlobCard = memo(GlobCardBase);
+export const SkillCard = memo(SkillCardBase);

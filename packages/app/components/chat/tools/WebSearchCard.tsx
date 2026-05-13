@@ -4,7 +4,7 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { resultToText, truncate } from './searchHelpers';
+import { firstLine, resultToText, truncate } from './searchHelpers';
 
 interface WebSearchCardProps {
   entry: ChatEntryTool;
@@ -19,11 +19,6 @@ interface WebSearchInput {
 function nonEmptyStrings(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((d): d is string => typeof d === 'string' && d.length > 0);
-}
-
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function WebSearchCardBase({ entry }: WebSearchCardProps): React.ReactElement {

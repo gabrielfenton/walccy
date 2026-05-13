@@ -5,7 +5,7 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardChip, type ToolCardHeaderData } from './ToolCard';
-import { basenameOf, resultToText, truncate } from './searchHelpers';
+import { basenameOf, firstLine, resultToText, truncate } from './searchHelpers';
 
 interface EditCardProps {
   entry: ChatEntryTool;
@@ -16,11 +16,6 @@ interface EditInput {
   old_string?: string;
   new_string?: string;
   replace_all?: boolean;
-}
-
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return i >= 0 ? s.slice(0, i) : s;
 }
 
 /**

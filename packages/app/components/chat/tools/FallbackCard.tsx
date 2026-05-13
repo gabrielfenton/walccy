@@ -4,7 +4,7 @@ import type { ChatEntryTool } from '../../../stores/messages.store';
 import { Colors } from '../../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../../constants/typography';
 import { ToolCard, type ToolCardHeaderData } from './ToolCard';
-import { resultToText, truncate } from './searchHelpers';
+import { firstLine, resultToText, truncate } from './searchHelpers';
 
 interface FallbackCardProps {
   entry: ChatEntryTool;
@@ -26,11 +26,6 @@ function isEmptyResult(result: unknown): boolean {
   if (typeof result === 'string') return result.length === 0;
   if (Array.isArray(result)) return result.length === 0;
   return false;
-}
-
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return i >= 0 ? s.slice(0, i) : s;
 }
 
 function FallbackCardBase({ entry }: FallbackCardProps): React.ReactElement {
