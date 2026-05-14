@@ -42,19 +42,10 @@ function EmptyState(): React.ReactElement {
       <View style={styles.emptyIconCircle}>
         <Text style={styles.emptyIcon}>▶</Text>
       </View>
-      <Text style={styles.emptyTitle}>No Claude Code sessions</Text>
+      <Text style={styles.emptyTitle}>No active sessions</Text>
       <Text style={styles.emptySubtitle}>
-        Run <Text style={styles.emptyCode}>claude</Text> in a terminal on your connected machine to see it here.
+        Tap <Text style={styles.emptyCode}>+</Text> to start a new Claude Code session in any project on your connected machine.
       </Text>
-      <TouchableOpacity
-        style={styles.refreshButton}
-        onPress={() => wsClient.listSessions()}
-        activeOpacity={0.75}
-        accessibilityRole="button"
-        accessibilityLabel="Refresh sessions"
-      >
-        <Text style={styles.refreshButtonText}>Refresh</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -431,20 +422,6 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     backgroundColor: Colors.surface,
   },
-  refreshButton: {
-    marginTop: 8,
-    paddingHorizontal: 28,
-    paddingVertical: 11,
-    backgroundColor: Colors.accent,
-    borderRadius: 10,
-  },
-  refreshButtonText: {
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.body,
-    fontWeight: '600',
-  },
-
   // ── Waiting banner ────────────────────────
 
   waitingBanner: {
