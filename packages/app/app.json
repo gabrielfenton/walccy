@@ -22,7 +22,7 @@
       "package": "dev.walccy.app",
       "googleServicesFile": "./google-services.json",
       "usesCleartextTraffic": true,
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "pan"
     },
     "plugins": [
       "expo-router",

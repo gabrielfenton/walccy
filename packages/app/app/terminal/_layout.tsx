@@ -145,6 +145,23 @@ export default function TerminalLayout(): React.ReactElement {
 
   const [newSessionSheetVisible, setNewSessionSheetVisible] = useState(false);
 
+  // Cold-start / post-kill recovery: the entry route is always
+  // `/terminal/no-session`, but if the daemon already has sessions (app
+  // relaunched, or the user just killed the active one while others
+  // remain) we shouldn't strand the user on the empty state with a
+  // populated tab bar.  Jump to the most-recently-active session.
+  useEffect(() => {
+    if (activeSessionId) return;
+    if (sessions.length === 0) return;
+    const mostRecent = [...sessions].sort(
+      (a, b) => b.lastActivityAt - a.lastActivityAt,
+    )[0];
+    if (mostRecent) {
+      setActiveSession(mostRecent.id);
+      router.replace(`/terminal/${mostRecent.id}`);
+    }
+  }, [activeSessionId, sessions, setActiveSession]);
+
   function handleSelectSession(id: string): void {
     setActiveSession(id);
     router.push(`/terminal/${id}`);
@@ -176,6 +193,11 @@ export default function TerminalLayout(): React.ReactElement {
   return (
     <KeyboardAvoidingView
       style={styles.kav}
+      // iOS uses padding-based avoidance. On Android the OS handles it via
+      // `windowSoftInputMode=adjustPan` (Expo SDK 54 enforces edge-to-edge,
+      // under which `adjustResize` no longer shrinks the RN view tree and
+      // a JS-side KAV gets no usable keyboard height) — so behavior is left
+      // undefined there to avoid fighting the OS pan.
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       // KAV wraps SafeAreaView whose top edge is the window top, so no
       // offset is needed. Explicit 0 documents that — revisit if any

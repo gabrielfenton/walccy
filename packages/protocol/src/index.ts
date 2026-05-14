@@ -28,6 +28,12 @@ export interface Session {
   waitingForInput: boolean;
   connectedClients: string[];
   owned: boolean;
+  /**
+   * SDK session id — the value `claude --resume` accepts. Captured from the
+   * init event and persisted here so it survives app reconnects (the init
+   * event itself only fires once, before a relaunched app is listening).
+   */
+  sdkSessionId?: string;
   model?: string;
   permissionMode?: PermissionMode;
   effortLevel?: EffortLevel;

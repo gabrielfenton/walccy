@@ -212,6 +212,7 @@ export class SessionManager extends EventEmitter {
       if (event.kind === 'init') {
         changes.model = info.model;
         changes.permissionMode = info.permissionMode;
+        changes.sdkSessionId = info.sdkSessionId;
       }
       this.emit('session-updated', session.id, changes);
     });

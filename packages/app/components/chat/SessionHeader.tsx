@@ -116,15 +116,18 @@ export const SessionHeader: React.FC<SessionHeaderProps> = ({ sessionId }) => {
         model:            sess.model,
         costSoFar:        sess.costSoFar,
         waitingForInput:  sess.waitingForInput,
+        sdkSessionId:     sess.sdkSessionId,
       };
     }),
   );
-  // The SDK session id (what `claude --resume` accepts) lives in the init
-  // event payload, not on Session.id.  Fall back to the daemon session id
-  // if init hasn't landed yet — it usually arrives within the first second.
-  const sdkSessionId = useInitMetadataStore((s) =>
+  // The SDK session id (what `claude --resume` accepts) is now persisted on
+  // the Session itself, so it survives app reconnects. Fall back to the
+  // init-metadata store for the brief window before the daemon's
+  // session-updated broadcast lands on a freshly spawned session.
+  const initSessionId = useInitMetadataStore((s) =>
     sessionId ? s.byId[sessionId]?.sessionId : undefined,
   );
+  const sdkSessionId = data?.sdkSessionId ?? initSessionId;
   const [resumeOpen, setResumeOpen] = useState(false);
 
   if (!data) return null;

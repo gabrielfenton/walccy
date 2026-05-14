@@ -253,6 +253,10 @@ export class Session extends EventEmitter {
       case 'init':
         if (event.model) this._info.model = event.model;
         if (event.permissionMode) this._info.permissionMode = event.permissionMode;
+        // The driver captures the SDK session id from the same message that
+        // produced this init event, so it's populated by now. Persist it on
+        // session info so the resume id survives app reconnects.
+        if (this.driver?.sdkSessionId) this._info.sdkSessionId = this.driver.sdkSessionId;
         break;
       case 'status':
         this._info.status =
