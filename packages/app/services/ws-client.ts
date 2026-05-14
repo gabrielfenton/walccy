@@ -35,6 +35,7 @@ import type {
   EffortLevel,
   SpawnSessionMessage,
   MemoryListMessage,
+  TranscriptListMessage,
 } from '@walccy/protocol';
 import { PendingRequests } from './ws/PendingRequests';
 import { ReconnectController } from './ws/ReconnectController';
@@ -92,6 +93,7 @@ class WsClient {
   private pendingSpawns = new PendingRequests<string>();
   private pendingDirectoryListing = new PendingRequests<DirectoryEntry[]>();
   private pendingMemory = new PendingRequests<MemoryListMessage>();
+  private pendingTranscripts = new PendingRequests<TranscriptListMessage>();
 
   private reconnect: ReconnectController;
   private ping: PingWatchdog;
@@ -329,6 +331,25 @@ class WsClient {
     return promise;
   }
 
+  listTranscripts(
+    cwd: string,
+    limit?: number,
+    timeoutMs = 8000,
+  ): Promise<TranscriptListMessage> {
+    const requestId = uuid();
+    const { promise } = this.pendingTranscripts.send<TranscriptListMessage>({
+      requestId,
+      timeoutMs,
+    });
+    this.send({
+      type: 'LIST_TRANSCRIPTS',
+      requestId,
+      cwd,
+      ...(typeof limit === 'number' ? { limit } : {}),
+    });
+    return promise;
+  }
+
   spawnSession(
     cwd: string,
     params: SpawnSessionParams = {},
@@ -550,6 +571,11 @@ class WsClient {
         break;
       }
 
+      case 'TRANSCRIPT_LIST': {
+        this.pendingTranscripts.resolve(msg.requestId, msg);
+        break;
+      }
+
       case 'SPAWN_RESULT': {
         if (msg.sessionId) {
           this.pendingSpawns.resolve(msg.requestId, msg.sessionId);
@@ -587,6 +613,8 @@ class WsClient {
   private rejectAllPending(err: Error): void {
     this.pendingSpawns.rejectAll(err);
     this.pendingDirectoryListing.rejectAll(err);
+    this.pendingMemory.rejectAll(err);
+    this.pendingTranscripts.rejectAll(err);
   }
 
   private clearAuthTimeout(): void {
