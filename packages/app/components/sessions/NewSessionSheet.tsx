@@ -29,7 +29,7 @@ import { SheetHeader } from '../ui/SheetHeader';
 import { SheetSearchBar } from '../ui/SheetSearchBar';
 import { SheetSectionHeader } from '../ui/SheetSectionHeader';
 import { Icon, type FeatherIconName } from '../ui/Icon';
-import type { DirectoryEntry } from '@walccy/protocol';
+import type { DirectoryEntry, TranscriptEntry } from '@walccy/protocol';
 
 interface NewSessionSheetProps {
   isVisible: boolean;
@@ -71,6 +71,13 @@ export function NewSessionSheet({
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeName, setWorktreeName] = useState('');
   const [resumeSessionId, setResumeSessionId] = useState('');
+  // Resume-picker state: the cwd we're listing transcripts for, plus the
+  // results.  Driven by the search field — typing `/abs/path` or `~/foo`
+  // triggers a debounced LIST_TRANSCRIPTS request so the user sees their
+  // prior laptop/phone sessions for that cwd and can pick one.
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
+  const [transcriptCwd, setTranscriptCwd] = useState<string | null>(null);
+  const [transcriptsLoading, setTranscriptsLoading] = useState(false);
 
   // Reset transient state when the sheet closes
   useEffect(() => {
@@ -82,6 +89,9 @@ export function NewSessionSheet({
       setWorktreeEnabled(false);
       setWorktreeName('');
       setResumeSessionId('');
+      setTranscripts([]);
+      setTranscriptCwd(null);
+      setTranscriptsLoading(false);
     }
   }, [isVisible]);
 
@@ -105,6 +115,55 @@ export function NewSessionSheet({
       void fetchDirectories();
     }
   }, [isVisible, fetchDirectories]);
+
+  // ── Fetch transcripts when query looks like a path ──
+  //
+  // Debounce 300ms — typing in the search bar shouldn't fire a request
+  // per keystroke.  Only triggers when Advanced is open AND the query
+  // starts with `/` or `~/` (the same heuristic the entry list uses to
+  // surface a "use this path" custom row).
+  useEffect(() => {
+    if (!isVisible || !advancedOpen) {
+      setTranscripts([]);
+      setTranscriptCwd(null);
+      return;
+    }
+    const trimmed = query.trim();
+    const looksLikePath = trimmed.startsWith('/') || trimmed.startsWith('~');
+    if (!looksLikePath || trimmed.length < 2) {
+      setTranscripts([]);
+      setTranscriptCwd(null);
+      return;
+    }
+    const cwd = trimmed.startsWith('~')
+      ? trimmed.replace(/^~/, process.env['HOME'] ?? '~')
+      : trimmed;
+    let cancelled = false;
+    setTranscriptsLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const reply = await wsClient.listTranscripts(cwd, 20);
+        if (cancelled) return;
+        if (reply.error) {
+          setTranscripts([]);
+        } else {
+          setTranscripts(reply.entries);
+        }
+        setTranscriptCwd(cwd);
+      } catch {
+        if (!cancelled) {
+          setTranscripts([]);
+          setTranscriptCwd(cwd);
+        }
+      } finally {
+        if (!cancelled) setTranscriptsLoading(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [isVisible, advancedOpen, query]);
 
   // ── Spawn ─────────────────────────────────────
 
@@ -356,6 +415,71 @@ export function NewSessionSheet({
               />
             </View>
 
+            {transcriptCwd && (
+              <View style={styles.transcriptSection}>
+                <Text style={styles.transcriptHeader} numberOfLines={1}>
+                  Resume from {transcriptCwd}
+                </Text>
+                {transcriptsLoading && transcripts.length === 0 ? (
+                  <View style={styles.transcriptLoading}>
+                    <ActivityIndicator color={Colors.accent} />
+                  </View>
+                ) : transcripts.length === 0 ? (
+                  <Text style={styles.transcriptEmpty}>
+                    No prior sessions in this directory.
+                  </Text>
+                ) : (
+                  transcripts.slice(0, 5).map((t) => {
+                    const selected = resumeSessionId === t.sessionId;
+                    const disabled = t.isLive;
+                    const idShort = t.sessionId.slice(0, 8);
+                    return (
+                      <TouchableOpacity
+                        key={t.sessionId}
+                        style={[
+                          styles.transcriptRow,
+                          selected && styles.transcriptRowSelected,
+                          disabled && styles.transcriptRowDisabled,
+                        ]}
+                        activeOpacity={0.7}
+                        disabled={disabled}
+                        onPress={() =>
+                          setResumeSessionId(
+                            selected ? '' : t.sessionId,
+                          )
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel={`Resume session ${idShort}`}
+                        accessibilityState={{ selected, disabled }}
+                      >
+                        <View style={styles.transcriptRowMain}>
+                          <Text
+                            style={styles.transcriptPreview}
+                            numberOfLines={1}
+                          >
+                            {t.preview ?? '(no preview available)'}
+                          </Text>
+                          <Text style={styles.transcriptMeta} numberOfLines={1}>
+                            {formatRelativeTime(t.modifiedAt)}
+                            {' · '}
+                            {t.messageCount} msgs
+                            {' · '}
+                            {idShort}…
+                          </Text>
+                        </View>
+                        {disabled && (
+                          <Text style={styles.transcriptLiveTag}>running</Text>
+                        )}
+                        {selected && !disabled && (
+                          <Text style={styles.transcriptSelectedTag}>✓</Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+              </View>
+            )}
+
             <View style={styles.advancedRow}>
               <Text style={styles.advancedLabel}>Resume</Text>
               <TextInput
@@ -396,11 +520,87 @@ export function NewSessionSheet({
 // Styles
 // ──────────────────────────────────────────────
 
+function formatRelativeTime(mtimeMs: number): string {
+  const deltaSec = Math.max(0, (Date.now() - mtimeMs) / 1000);
+  if (deltaSec < 60) return 'just now';
+  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`;
+  if (deltaSec < 86400) return `${Math.floor(deltaSec / 3600)}h ago`;
+  if (deltaSec < 86400 * 7) return `${Math.floor(deltaSec / 86400)}d ago`;
+  return new Date(mtimeMs).toLocaleDateString();
+}
+
 const styles = StyleSheet.create({
   advanced: {
     paddingHorizontal: Spacing.lg,
     paddingTop: 4,
     paddingBottom: 6,
+  },
+  transcriptSection: {
+    marginBottom: 10,
+    paddingTop: 4,
+  },
+  transcriptHeader: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    fontWeight: FontWeight.medium,
+    marginBottom: 6,
+  },
+  transcriptLoading: {
+    paddingVertical: 8,
+    alignItems: 'flex-start',
+  },
+  transcriptEmpty: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    paddingVertical: 4,
+  },
+  transcriptRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.surfaceHigh,
+    marginBottom: 4,
+    gap: 8,
+  },
+  transcriptRowSelected: {
+    borderWidth: 1,
+    borderColor: Colors.accent,
+    backgroundColor: Colors.accent + '22',
+  },
+  transcriptRowDisabled: {
+    opacity: 0.5,
+  },
+  transcriptRowMain: {
+    flex: 1,
+  },
+  transcriptPreview: {
+    color: Colors.textPrimary,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption,
+    marginBottom: 2,
+  },
+  transcriptMeta: {
+    color: Colors.textSecondary,
+    fontFamily: FontFamily.mono,
+    fontSize: FontSize.caption - 1,
+  },
+  transcriptLiveTag: {
+    color: Colors.accentAmber,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.caption - 1,
+    fontWeight: FontWeight.semiBold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  transcriptSelectedTag: {
+    color: Colors.accent,
+    fontFamily: FontFamily.ui,
+    fontSize: FontSize.body,
+    fontWeight: FontWeight.semiBold,
   },
   advancedToggle: {
     flexDirection: 'row',
