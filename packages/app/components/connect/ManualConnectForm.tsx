@@ -7,7 +7,6 @@ import React, { useState } from 'react';
 import {
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
   ScrollView,
@@ -16,6 +15,7 @@ import {
 } from 'react-native';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
+import { WInput } from '../ui/WInput';
 
 // ── Types ─────────────────────────────────────
 
@@ -75,15 +75,14 @@ export const ManualConnectForm: React.FC<ManualConnectFormProps> = ({
         {/* Label field */}
         <View style={styles.fieldGroup}>
           <Text style={styles.fieldLabel}>Label</Text>
-          <TextInput
-            style={styles.input}
+          <WInput
+            variant="short"
+            inputStyle={styles.input}
             placeholder="Home Laptop"
-            placeholderTextColor={Colors.textSecondary}
             value={label}
             onChangeText={setLabel}
             autoCapitalize="words"
             returnKeyType="next"
-            selectionColor={Colors.accent}
           />
         </View>
 
@@ -92,20 +91,17 @@ export const ManualConnectForm: React.FC<ManualConnectFormProps> = ({
           <Text style={styles.fieldLabel}>
             Host <Text style={styles.required}>*</Text>
           </Text>
-          <TextInput
-            style={[styles.input, errors.host ? styles.inputError : null]}
+          <WInput
+            variant="short"
+            inputStyle={[styles.input, errors.host ? styles.inputError : null]}
             placeholder="my-laptop.tail12345.ts.net"
-            placeholderTextColor={Colors.textSecondary}
             value={host}
             onChangeText={(v) => {
               setHost(v);
               if (errors.host) setErrors((e) => ({ ...e, host: undefined }));
             }}
-            autoCapitalize="none"
             keyboardType="url"
-            autoCorrect={false}
             returnKeyType="next"
-            selectionColor={Colors.accent}
           />
           {errors.host ? (
             <Text style={styles.errorText}>{errors.host}</Text>
@@ -115,15 +111,14 @@ export const ManualConnectForm: React.FC<ManualConnectFormProps> = ({
         {/* Port field */}
         <View style={styles.fieldGroup}>
           <Text style={styles.fieldLabel}>Port</Text>
-          <TextInput
-            style={styles.input}
+          <WInput
+            variant="short"
+            inputStyle={styles.input}
             placeholder="7779"
-            placeholderTextColor={Colors.textSecondary}
             value={portText}
             onChangeText={setPortText}
             keyboardType="number-pad"
             returnKeyType="next"
-            selectionColor={Colors.accent}
           />
         </View>
 
@@ -132,21 +127,18 @@ export const ManualConnectForm: React.FC<ManualConnectFormProps> = ({
           <Text style={styles.fieldLabel}>
             Secret <Text style={styles.required}>*</Text>
           </Text>
-          <TextInput
-            style={[styles.input, errors.secret ? styles.inputError : null]}
+          <WInput
+            variant="short"
+            inputStyle={[styles.input, errors.secret ? styles.inputError : null]}
             placeholder="••••••••"
-            placeholderTextColor={Colors.textSecondary}
             value={secret}
             onChangeText={(v) => {
               setSecret(v);
               if (errors.secret) setErrors((e) => ({ ...e, secret: undefined }));
             }}
             secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
             returnKeyType="done"
             onSubmitEditing={handleConnect}
-            selectionColor={Colors.accent}
           />
           {errors.secret ? (
             <Text style={styles.errorText}>{errors.secret}</Text>
@@ -215,6 +207,9 @@ const styles = StyleSheet.create({
 
   input: {
     height: 44,
+    // height is fixed — zero out WInput's `short` paddingVertical so the
+    // content box isn't compressed inside the 44pt frame.
+    paddingVertical: 0,
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,

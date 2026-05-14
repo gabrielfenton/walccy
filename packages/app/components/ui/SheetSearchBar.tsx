@@ -7,14 +7,13 @@
 import React from 'react';
 import {
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { Colors } from '../../constants/colors';
-import { FontFamily, FontSize } from '../../constants/typography';
 import { Spacing } from '../../constants/spacing';
 import { Icon } from './Icon';
+import { WInput } from './WInput';
 
 export interface SheetSearchBarProps {
   value: string;
@@ -37,18 +36,14 @@ export function SheetSearchBar({
   return (
     <View style={styles.container}>
       <Icon name="search" size={16} color={Colors.textSecondary} style={styles.leadingIcon} />
-      <TextInput
-        style={[
-          styles.input,
-          { fontFamily: monospace ? FontFamily.mono : FontFamily.ui },
-        ]}
+      <WInput
+        variant="bare"
+        monospace={monospace}
+        containerStyle={styles.inputWrap}
         value={value}
         onChangeText={onChangeText}
         onSubmitEditing={onSubmit}
         placeholder={placeholder}
-        placeholderTextColor={Colors.textSecondary}
-        autoCapitalize="none"
-        autoCorrect={false}
         spellCheck={false}
         returnKeyType="search"
         accessibilityLabel={placeholder}
@@ -83,11 +78,8 @@ const styles = StyleSheet.create({
   leadingIcon: {
     marginRight: Spacing.sm,
   },
-  input: {
+  inputWrap: {
     flex: 1,
-    color: Colors.textPrimary,
-    fontSize: FontSize.input,
-    paddingVertical: 0,
   },
   clearBtn: {
     paddingLeft: Spacing.sm,

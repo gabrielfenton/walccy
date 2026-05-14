@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
+import { WInput } from '../ui/WInput';
 
 // ──────────────────────────────────────────────
 // Props
@@ -43,16 +44,14 @@ export function PromptSearchBar({
   return (
     <View style={styles.container}>
       <Text style={styles.icon}>🔍</Text>
-      <TextInput
+      <WInput
         ref={inputRef}
-        style={styles.input}
+        variant="bare"
+        containerStyle={styles.inputWrap}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={Colors.textSecondary}
         returnKeyType="search"
-        autoCapitalize="none"
-        autoCorrect={false}
         clearButtonMode="never"
         accessibilityLabel="Search prompts"
       />
@@ -92,12 +91,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
 
-  input: {
+  inputWrap: {
     flex: 1,
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.ui,
-    fontSize: 14,
-    padding: 0,
   },
 
   clearIcon: {

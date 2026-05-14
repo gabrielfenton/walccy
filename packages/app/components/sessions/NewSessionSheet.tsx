@@ -14,11 +14,11 @@ import {
   FlatList,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { wsClient } from '../../services/ws-client';
+import { WInput } from '../ui/WInput';
 import { useSettingsStore } from '../../stores/settings.store';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
@@ -400,8 +400,11 @@ export function NewSessionSheet({
                 </View>
                 <Text style={styles.checkboxLabel}>Worktree</Text>
               </TouchableOpacity>
-              <TextInput
-                style={[
+              <WInput
+                variant="short"
+                monospace
+                containerStyle={styles.advancedInputWrap}
+                inputStyle={[
                   styles.advancedInput,
                   !worktreeEnabled && styles.advancedInputDisabled,
                 ]}
@@ -409,9 +412,6 @@ export function NewSessionSheet({
                 onChangeText={setWorktreeName}
                 editable={worktreeEnabled}
                 placeholder="branch / name (optional)"
-                placeholderTextColor={Colors.textSecondary}
-                autoCorrect={false}
-                autoCapitalize="none"
               />
             </View>
 
@@ -482,14 +482,14 @@ export function NewSessionSheet({
 
             <View style={styles.advancedRow}>
               <Text style={styles.advancedLabel}>Resume</Text>
-              <TextInput
-                style={styles.advancedInput}
+              <WInput
+                variant="short"
+                monospace
+                containerStyle={styles.advancedInputWrap}
+                inputStyle={styles.advancedInput}
                 value={resumeSessionId}
                 onChangeText={setResumeSessionId}
                 placeholder="prior session id (optional)"
-                placeholderTextColor={Colors.textSecondary}
-                autoCorrect={false}
-                autoCapitalize="none"
               />
             </View>
           </View>
@@ -638,8 +638,14 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.medium,
     width: 86,
   },
+  advancedInputWrap: {
+    flex: 1,
+  },
   advancedInput: {
     flex: 1,
+    // Override WInput's `short` 44pt minHeight — these are compact mono
+    // fields, sized by their own padding + caption font.
+    minHeight: 0,
     backgroundColor: Colors.surfaceHigh,
     borderRadius: 8,
     borderWidth: 1,

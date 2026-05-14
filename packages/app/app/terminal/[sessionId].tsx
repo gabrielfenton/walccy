@@ -5,8 +5,6 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  KeyboardAvoidingView,
-  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -276,10 +274,7 @@ export default function TerminalSessionScreen(): React.ReactElement {
   // ─────────────────────────────────────────────
 
   return (
-    <KeyboardAvoidingView
-      style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
+    <View style={styles.root}>
       {/* Read-only banner for external sessions */}
       {isReadOnly && session && (
         <ReadOnlyBanner
@@ -357,7 +352,7 @@ export default function TerminalSessionScreen(): React.ReactElement {
         onSubmit={handleSavePromptSubmit}
         onCancel={() => setSavePromptText(null)}
       />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

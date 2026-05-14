@@ -7,11 +7,12 @@
 // Picked images attach inline; on send we ship a multipart
 // UserContentBlock[] (images first, then text) via sendUserMessage.
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActionSheetIOS,
   Alert,
   Image,
+  Keyboard,
   Modal,
   Platform,
   Pressable,
@@ -31,6 +32,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { wsClient } from '../../services/ws-client';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
+import { WInput } from '../ui/WInput';
 import type { PermissionMode, UserContentBlock } from '@walccy/protocol';
 
 const MODE_OPTIONS: ReadonlyArray<{ mode: PermissionMode; label: string }> = [
@@ -60,6 +62,21 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
   const inputRef = useRef<TextInput | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
   const insets = useSafeAreaInsets();
+
+  // When the keyboard is up it already covers the home-indicator area, so
+  // the bottom safe-area inset would just be dead space between the input
+  // and the keyboard. Drop it while the keyboard is visible.
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // The session is "streaming" while it is generating a turn — drive the
   // stop/send swap from the daemon-reported status.
@@ -246,7 +263,7 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
       style={[
         styles.container,
         waitingForInput && styles.containerWaiting,
-        { paddingBottom: 8 + insets.bottom },
+        { paddingBottom: 8 + (keyboardVisible ? 0 : insets.bottom) },
       ]}
     >
       <View style={styles.chipRow}>
@@ -329,17 +346,15 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
             <Text style={[styles.plusGlyph, styles.plusGlyphDisabled]}>+</Text>
           </View>
         )}
-        <TextInput
+        <WInput
           ref={inputRef}
-          style={styles.input}
+          variant="long"
+          containerStyle={styles.inputWrap}
           value={text}
           onChangeText={setText}
           onSelectionChange={handleSelectionChange}
           placeholder="Message Claude…"
-          placeholderTextColor={Colors.textSecondary}
-          multiline
           editable={!streaming}
-          returnKeyType="default"
           accessibilityLabel="Message input"
           accessibilityHint="Type a message and tap send"
         />
@@ -541,19 +556,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 14,
   },
-  input: {
+  inputWrap: {
     flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 10,
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.input,
-    lineHeight: FontSize.input * 1.35,
   },
   button: {
     width: 40,

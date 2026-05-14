@@ -8,6 +8,8 @@
 
 import React, { useEffect, useState } from 'react';
 import {
+  KeyboardAvoidingView,
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -172,6 +174,14 @@ export default function TerminalLayout(): React.ReactElement {
   }
 
   return (
+    <KeyboardAvoidingView
+      style={styles.kav}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      // KAV wraps SafeAreaView whose top edge is the window top, so no
+      // offset is needed. Explicit 0 documents that — revisit if any
+      // chrome is ever added above this KAV.
+      keyboardVerticalOffset={0}
+    >
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       {/* Header */}
       <HeaderBar />
@@ -202,12 +212,17 @@ export default function TerminalLayout(): React.ReactElement {
         onSpawned={handleSessionSpawned}
       />
     </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 
 // ── Styles ────────────────────────────────────
 
 const styles = StyleSheet.create({
+  kav: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
   safeArea: {
     flex: 1,
     backgroundColor: Colors.background,

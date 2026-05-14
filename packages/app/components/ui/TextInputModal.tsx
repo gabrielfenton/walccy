@@ -8,7 +8,6 @@ import {
   Modal,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
@@ -16,6 +15,7 @@ import {
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { Spacing } from '../../constants/spacing';
+import { WInput } from './WInput';
 
 interface TextInputModalProps {
   visible: boolean;
@@ -62,12 +62,13 @@ export function TextInputModal({
             <View style={styles.dialog}>
               <Text style={styles.title}>{title}</Text>
               {message ? <Text style={styles.message}>{message}</Text> : null}
-              <TextInput
-                style={styles.input}
+              <WInput
+                variant="short"
+                containerStyle={styles.input}
                 value={value}
                 onChangeText={setValue}
                 placeholder={placeholder}
-                placeholderTextColor={Colors.textSecondary}
+                autoCapitalize="sentences"
                 autoFocus
                 onSubmitEditing={handleSubmit}
                 returnKeyType="done"
@@ -126,15 +127,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   input: {
-    color: Colors.textPrimary,
-    fontFamily: FontFamily.ui,
-    fontSize: FontSize.body,
-    backgroundColor: Colors.surfaceHigh,
-    borderRadius: 8,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
     marginTop: Spacing.xs,
   },
   actions: {

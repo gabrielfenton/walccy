@@ -10,12 +10,12 @@ import {
   Keyboard,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useShallow } from 'zustand/react/shallow';
 import { TextInputModal } from '../ui/TextInputModal';
+import { WInput } from '../ui/WInput';
 import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import type { Prompt } from '../../stores/prompt-library.store';
 import { PromptSearchBar } from './PromptSearchBar';
@@ -64,26 +64,25 @@ function NewPromptForm({ onSave, onCancel }: NewPromptFormProps): React.ReactEle
 
   return (
     <View style={formStyles.container}>
-      <TextInput
-        style={formStyles.titleInput}
+      <WInput
+        variant="bare"
+        inputStyle={formStyles.titleInput}
         value={title}
         onChangeText={setTitle}
         placeholder="Prompt title (required)"
-        placeholderTextColor={Colors.textSecondary}
+        autoCapitalize="sentences"
         autoFocus
         returnKeyType="next"
         accessibilityLabel="Prompt title"
       />
-      <TextInput
-        style={formStyles.contentInput}
+      <WInput
+        variant="long"
+        maxHeight={220}
+        inputStyle={formStyles.contentInput}
         value={content}
         onChangeText={setContent}
         placeholder="Prompt content…"
-        placeholderTextColor={Colors.textSecondary}
-        multiline
         numberOfLines={4}
-        textAlignVertical="top"
-        returnKeyType="default"
         accessibilityLabel="Prompt content"
       />
       <View style={formStyles.actions}>
@@ -132,9 +131,16 @@ const formStyles = StyleSheet.create({
     color: Colors.textPrimary,
     fontFamily: FontFamily.ui,
     fontSize: FontSize.body,
+    // Match lineHeight to this field's own fontSize — WInput's `long`
+    // variant sets it for FontSize.input, which is a touch too large here.
+    lineHeight: FontSize.body * 1.4,
     minHeight: 88,
     paddingVertical: Spacing.sm,
     paddingHorizontal: 0,
+    // The form card already provides the surfaceHigh background — strip
+    // WInput's `long` box decoration so it doesn't nest a second box.
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   actions: {
     flexDirection: 'row',
