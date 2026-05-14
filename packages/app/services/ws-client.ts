@@ -7,6 +7,7 @@
 // envelopes for the user input / interrupt / plan-accept / etc. control
 // plane.
 
+import { Alert } from 'react-native';
 import { MMKV } from 'react-native-mmkv';
 import { v4 as uuid } from 'uuid';
 import { connectionStore } from '../stores/connection.store';
@@ -556,6 +557,13 @@ class WsClient {
 
       case 'ERROR': {
         console.warn('[WsClient] Daemon error:', msg.code, msg.message);
+        // CONTROL_ERROR is the daemon rejecting a control action the user
+        // explicitly took (e.g. switching to Bypass mode on a session that
+        // wasn't launched with --dangerously-skip-permissions). Without a
+        // visible surface the tap looks like a no-op — show the reason.
+        if (msg.code === 'CONTROL_ERROR') {
+          Alert.alert("Couldn't apply that change", msg.message);
+        }
         break;
       }
 

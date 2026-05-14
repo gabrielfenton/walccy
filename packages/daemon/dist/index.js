@@ -3,8 +3,8 @@
 // src/index.ts
 import { Command } from "commander";
 import * as crypto4 from "crypto";
-import * as os7 from "os";
-import * as path8 from "path";
+import * as os8 from "os";
+import * as path9 from "path";
 
 // package.json
 var package_default = {
@@ -994,11 +994,13 @@ var Session = class extends EventEmitter2 {
     if (!this.driver) return;
     await this.driver.setPermissionMode(mode);
     this._info.permissionMode = mode;
+    this.emit("info-updated", { permissionMode: mode });
   }
   async setModel(model) {
     if (!this.driver) return;
     await this.driver.setModel(model);
     this._info.model = model;
+    this.emit("info-updated", { model });
   }
   resolvePermission(args) {
     if (!this.driver) return false;
@@ -1049,6 +1051,7 @@ var Session = class extends EventEmitter2 {
       case "init":
         if (event.model) this._info.model = event.model;
         if (event.permissionMode) this._info.permissionMode = event.permissionMode;
+        if (this.driver?.sdkSessionId) this._info.sdkSessionId = this.driver.sdkSessionId;
         break;
       case "status":
         this._info.status = event.status === "requesting" || event.status === "compacting" ? "active" : "idle";
@@ -1395,7 +1398,11 @@ var SessionManager = class extends EventEmitter4 {
       if (event.kind === "init") {
         changes.model = info.model;
         changes.permissionMode = info.permissionMode;
+        changes.sdkSessionId = info.sdkSessionId;
       }
+      this.emit("session-updated", session.id, changes);
+    });
+    session.on("info-updated", (changes) => {
       this.emit("session-updated", session.id, changes);
     });
   }
@@ -1932,6 +1939,196 @@ async function handleListMemory(client, msg, deps) {
   deps.registry.send(client.ws, reply);
 }
 
+// src/transcript-handler.ts
+import { promises as fs7 } from "fs";
+import path7 from "path";
+import os6 from "os";
+var PREVIEW_HEAD_BYTES = 4 * 1024;
+var PREVIEW_MAX_CHARS = 80;
+var DEFAULT_LIMIT = 20;
+var MAX_LIMIT = 100;
+function encodeCwdForClaudeProjects2(cwd) {
+  return cwd.replace(/\//g, "-");
+}
+function transcriptDirFor(cwd) {
+  return path7.join(
+    os6.homedir(),
+    ".claude",
+    "projects",
+    encodeCwdForClaudeProjects2(cwd)
+  );
+}
+function sendError2(registry, client, msg, reason) {
+  const reply = {
+    type: "TRANSCRIPT_LIST",
+    requestId: msg.requestId,
+    cwd: msg.cwd,
+    dir: "",
+    entries: [],
+    error: reason
+  };
+  registry.send(client.ws, reply);
+}
+function extractFirstUserMessagePreview(head) {
+  const lines = head.split("\n");
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const p = parsed;
+    if (p.type !== "user") continue;
+    let content = void 0;
+    const inner = p.message;
+    if (inner && typeof inner === "object" && inner !== null) {
+      content = inner.content;
+    }
+    if (content === void 0) {
+      content = p.content;
+    }
+    const text = stringifyContent(content);
+    if (text === null) continue;
+    const trimmed = text.trim();
+    if (trimmed.length === 0) continue;
+    return trimmed.length > PREVIEW_MAX_CHARS ? trimmed.slice(0, PREVIEW_MAX_CHARS - 1) + "\u2026" : trimmed;
+  }
+  return null;
+}
+function stringifyContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const parts = [];
+  for (const part of content) {
+    if (typeof part === "string") {
+      parts.push(part);
+    } else if (part && typeof part === "object") {
+      const obj = part;
+      if (obj.type === "text" && typeof obj.text === "string") {
+        parts.push(obj.text);
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+async function readEntry(dir, filename, liveIds) {
+  const sessionId = filename.replace(/\.jsonl$/, "");
+  const fullPath = path7.join(dir, filename);
+  let stat;
+  try {
+    stat = await fs7.stat(fullPath);
+  } catch {
+    return null;
+  }
+  let preview = null;
+  let messageCount = 0;
+  try {
+    const handle = await fs7.open(fullPath, "r");
+    try {
+      const len = Math.min(stat.size, PREVIEW_HEAD_BYTES);
+      const buf = Buffer.alloc(len);
+      await handle.read(buf, 0, len, 0);
+      preview = extractFirstUserMessagePreview(buf.toString("utf8"));
+    } finally {
+      await handle.close();
+    }
+    messageCount = await countLines(fullPath);
+  } catch (err) {
+    const e = err;
+    logger_default.debug?.(`transcript head read failed for ${filename}: ${e.message}`);
+  }
+  return {
+    sessionId,
+    modifiedAt: stat.mtimeMs,
+    sizeBytes: stat.size,
+    preview,
+    messageCount,
+    isLive: liveIds.has(sessionId)
+  };
+}
+async function countLines(file) {
+  const handle = await fs7.open(file, "r");
+  try {
+    const buf = Buffer.alloc(64 * 1024);
+    let count = 0;
+    let position = 0;
+    while (true) {
+      const { bytesRead } = await handle.read(buf, 0, buf.length, position);
+      if (bytesRead === 0) break;
+      for (let i = 0; i < bytesRead; i++) {
+        if (buf[i] === 10) count++;
+      }
+      position += bytesRead;
+    }
+    return count;
+  } finally {
+    await handle.close();
+  }
+}
+async function handleListTranscripts(client, msg, deps) {
+  if (typeof msg.cwd !== "string" || msg.cwd.length === 0) {
+    sendError2(deps.registry, client, msg, "INVALID_CWD");
+    return;
+  }
+  const dir = transcriptDirFor(msg.cwd);
+  const limit = Math.min(
+    Math.max(msg.limit ?? DEFAULT_LIMIT, 1),
+    MAX_LIMIT
+  );
+  let names;
+  try {
+    const ents = await fs7.readdir(dir, { withFileTypes: true });
+    names = ents.filter((e) => e.isFile() && e.name.endsWith(".jsonl")).map((e) => e.name);
+  } catch (err) {
+    const e = err;
+    if (e.code === "ENOENT") {
+      const reply2 = {
+        type: "TRANSCRIPT_LIST",
+        requestId: msg.requestId,
+        cwd: msg.cwd,
+        dir,
+        entries: []
+      };
+      deps.registry.send(client.ws, reply2);
+      return;
+    }
+    logger_default.warn(`transcript listing failed for ${dir}: ${e.message}`);
+    sendError2(deps.registry, client, msg, `READ_FAILED:${e.code ?? "EUNKNOWN"}`);
+    return;
+  }
+  const liveIds = new Set(
+    deps.sessionManager.getAllSessions().map((s) => s.info.id).filter((id) => typeof id === "string")
+  );
+  const stats = await Promise.all(
+    names.map(async (name) => {
+      try {
+        const st = await fs7.stat(path7.join(dir, name));
+        return { name, mtimeMs: st.mtimeMs };
+      } catch {
+        return null;
+      }
+    })
+  );
+  const sorted = stats.filter((s) => s !== null).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, limit);
+  const entries = [];
+  for (const s of sorted) {
+    const e = await readEntry(dir, s.name, liveIds);
+    if (e) entries.push(e);
+  }
+  const reply = {
+    type: "TRANSCRIPT_LIST",
+    requestId: msg.requestId,
+    cwd: msg.cwd,
+    dir,
+    entries
+  };
+  deps.registry.send(client.ws, reply);
+}
+
 // src/message-router.ts
 var MessageRouter = class _MessageRouter {
   constructor(deps) {
@@ -2015,6 +2212,12 @@ var MessageRouter = class _MessageRouter {
           registry: this.deps.registry
         });
         break;
+      case "LIST_TRANSCRIPTS":
+        void handleListTranscripts(client, typed, {
+          sessionManager: this.deps.sessionManager,
+          registry: this.deps.registry
+        });
+        break;
       default: {
         const _exhaustive = typed;
         void _exhaustive;
@@ -2048,6 +2251,8 @@ var MessageRouter = class _MessageRouter {
         return typeof msg.cwd === "string" && msg.cwd.length > 0 && msg.cwd.length <= 4096 && typeof msg.requestId === "string" && msg.requestId.length > 0;
       case "LIST_MEMORY":
         return typeof msg.requestId === "string" && msg.requestId.length > 0 && typeof msg.sessionId === "string" && msg.sessionId.length > 0 && (msg.fileName === void 0 || typeof msg.fileName === "string" && msg.fileName.length <= 256);
+      case "LIST_TRANSCRIPTS":
+        return typeof msg.requestId === "string" && msg.requestId.length > 0 && typeof msg.cwd === "string" && msg.cwd.length > 0 && msg.cwd.length <= 4096 && (msg.limit === void 0 || typeof msg.limit === "number" && Number.isInteger(msg.limit) && msg.limit > 0 && msg.limit <= 200);
       case "CONTROL_MESSAGE":
         return typeof msg.sessionId === "string" && msg.sessionId.length > 0 && typeof msg.message === "object" && msg.message !== null;
       default: {
@@ -2441,7 +2646,7 @@ var WsServer = class {
 };
 
 // src/push.ts
-import * as fs7 from "fs";
+import * as fs8 from "fs";
 import * as https from "https";
 import * as crypto3 from "crypto";
 function base64url(buf) {
@@ -2512,8 +2717,8 @@ var PushService = class {
   constructor(serviceAccountPath) {
     const saPath = serviceAccountPath ?? process.env["WALCCY_FCM_SERVICE_ACCOUNT"] ?? `${process.env["HOME"]}/.config/walccy/fcm-service-account.json`;
     try {
-      if (fs7.existsSync(saPath)) {
-        const stat = fs7.statSync(saPath);
+      if (fs8.existsSync(saPath)) {
+        const stat = fs8.statSync(saPath);
         const looseBits = stat.mode & 63;
         if (looseBits !== 0) {
           const modeStr = (stat.mode & 511).toString(8).padStart(3, "0");
@@ -2521,7 +2726,7 @@ var PushService = class {
             `fcm-service-account.json mode is 0${modeStr} \u2014 readable by group/other. FCM private key should be 0600. Run: chmod 600 ${saPath}`
           );
         }
-        const raw = fs7.readFileSync(saPath, "utf-8");
+        const raw = fs8.readFileSync(saPath, "utf-8");
         this.serviceAccount = JSON.parse(raw);
         logger_default.info(`FCM push service loaded (project: ${this.serviceAccount.project_id})`);
       } else {
@@ -2723,21 +2928,21 @@ var Daemon = class {
 };
 
 // src/installer.ts
-import * as fs8 from "fs";
-import * as path7 from "path";
-import * as os6 from "os";
+import * as fs9 from "fs";
+import * as path8 from "path";
+import * as os7 from "os";
 import { execFile as execFile2 } from "child_process";
 import { promisify as promisify2 } from "util";
 var execFileAsync2 = promisify2(execFile2);
 function getServiceDir() {
-  return path7.join(os6.homedir(), ".config", "systemd", "user");
+  return path8.join(os7.homedir(), ".config", "systemd", "user");
 }
 function getServicePath() {
-  return path7.join(getServiceDir(), "walccy.service");
+  return path8.join(getServiceDir(), "walccy.service");
 }
 function buildUnitFile() {
   const execPath = process.execPath;
-  const scriptPath = path7.resolve(__dirname, "..", "dist", "index.js");
+  const scriptPath = path8.resolve(__dirname, "..", "dist", "index.js");
   return `[Unit]
 Description=Walccy Claude session daemon
 After=network.target tailscaled.service
@@ -2760,10 +2965,10 @@ WantedBy=default.target
 async function installSystemdService() {
   const serviceDir = getServiceDir();
   const servicePath = getServicePath();
-  if (!fs8.existsSync(serviceDir)) {
-    fs8.mkdirSync(serviceDir, { recursive: true });
+  if (!fs9.existsSync(serviceDir)) {
+    fs9.mkdirSync(serviceDir, { recursive: true });
   }
-  fs8.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
+  fs9.writeFileSync(servicePath, buildUnitFile(), { encoding: "utf-8", mode: 420 });
   console.log(`Wrote systemd unit: ${servicePath}`);
   try {
     await execFileAsync2("systemctl", ["--user", "daemon-reload"]);
@@ -2787,8 +2992,8 @@ async function uninstallSystemdService() {
     await execFileAsync2("systemctl", ["--user", "disable", "walccy.service"]);
   } catch {
   }
-  if (fs8.existsSync(servicePath)) {
-    fs8.unlinkSync(servicePath);
+  if (fs9.existsSync(servicePath)) {
+    fs9.unlinkSync(servicePath);
     console.log(`Removed systemd unit: ${servicePath}`);
   } else {
     console.log("No systemd unit file found.");
@@ -2801,7 +3006,7 @@ async function uninstallSystemdService() {
 }
 async function getServiceStatus() {
   const servicePath = getServicePath();
-  if (!fs8.existsSync(servicePath)) {
+  if (!fs9.existsSync(servicePath)) {
     return "not-installed";
   }
   try {
@@ -2922,7 +3127,7 @@ program.command("sessions").description("List active sessions as JSON (reads dae
 program.command("pair").description("Display QR code for mobile pairing").action(async () => {
   const config = loadConfig();
   const tailscaleIP = await getTailscaleIP();
-  const hostname2 = os7.hostname();
+  const hostname2 = os8.hostname();
   const pairingData = {
     v: 1,
     host: tailscaleIP ?? hostname2,
@@ -2982,15 +3187,15 @@ program.command("uninstall").description("Uninstall Walccy service and remove co
       try {
         await uninstallSystemdService();
         const configPath = getConfigPath();
-        const configDir = path8.dirname(configPath);
-        const fs9 = await import("fs");
-        if (fs9.existsSync(configDir)) {
-          fs9.rmSync(configDir, { recursive: true, force: true });
+        const configDir = path9.dirname(configPath);
+        const fs10 = await import("fs");
+        if (fs10.existsSync(configDir)) {
+          fs10.rmSync(configDir, { recursive: true, force: true });
           console.log(`Removed config directory: ${configDir}`);
         }
-        const logDir2 = path8.join(os7.homedir(), ".walccy");
-        if (fs9.existsSync(logDir2)) {
-          fs9.rmSync(logDir2, { recursive: true, force: true });
+        const logDir2 = path9.join(os8.homedir(), ".walccy");
+        if (fs10.existsSync(logDir2)) {
+          fs10.rmSync(logDir2, { recursive: true, force: true });
           console.log(`Removed log directory: ${logDir2}`);
         }
         console.log("Walccy uninstalled successfully.");

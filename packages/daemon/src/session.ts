@@ -48,6 +48,13 @@ export interface SessionEvents {
   'session-event': (event: SessionEvent, index: number) => void;
   /** The underlying driver stream ended (turn loop closed or stop()). */
   exit: () => void;
+  /**
+   * Session info changed outside the event stream — e.g. permission mode or
+   * model toggled mid-session. Without this the manager only mirrors
+   * `session-updated` off `session-event`, so a mid-session toggle would
+   * never reach the app and the UI control would silently snap back.
+   */
+  'info-updated': (changes: Partial<SessionInfo>) => void;
 }
 
 // ──────────────────────────────────────────────
@@ -165,12 +172,14 @@ export class Session extends EventEmitter {
     if (!this.driver) return;
     await this.driver.setPermissionMode(mode);
     this._info.permissionMode = mode;
+    this.emit('info-updated', { permissionMode: mode });
   }
 
   async setModel(model?: string): Promise<void> {
     if (!this.driver) return;
     await this.driver.setModel(model);
     this._info.model = model;
+    this.emit('info-updated', { model });
   }
 
   resolvePermission(args: {

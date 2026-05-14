@@ -216,6 +216,12 @@ export class SessionManager extends EventEmitter {
       }
       this.emit('session-updated', session.id, changes);
     });
+
+    // Mid-session info changes (permission mode / model toggled by the app)
+    // arrive outside the event stream — fan them straight through.
+    session.on('info-updated', (changes) => {
+      this.emit('session-updated', session.id, changes);
+    });
   }
 
   // Typed overloads
