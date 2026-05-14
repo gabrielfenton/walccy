@@ -227,6 +227,12 @@ export class ClaudeDriver extends EventEmitter {
       pathToClaudeCodeExecutable: resolveClaudePath(),
       canUseTool,
       includePartialMessages: true,
+      stderr: (data) => {
+        const trimmed = data.trim();
+        if (trimmed.length > 0) {
+          logger.warn(`[claude stderr] ${trimmed}`);
+        }
+      },
     };
 
     // Cast the prompt source: the SDK accepts `AsyncIterable<SDKUserMessage>`

@@ -644,7 +644,13 @@ var ClaudeDriver = class extends EventEmitter {
       extraArgs: this.opts.extraArgs,
       pathToClaudeCodeExecutable: resolveClaudePath(),
       canUseTool,
-      includePartialMessages: true
+      includePartialMessages: true,
+      stderr: (data) => {
+        const trimmed = data.trim();
+        if (trimmed.length > 0) {
+          logger_default.warn(`[claude stderr] ${trimmed}`);
+        }
+      }
     };
     const promptIter = this.inputQueue.iter(() => this.currentSessionId);
     this.q = query({ prompt: promptIter, options });
@@ -934,7 +940,6 @@ var Session = class extends EventEmitter2 {
     if (opts.worktree !== void 0 && opts.worktree !== false) {
       extraArgs["worktree"] = typeof opts.worktree === "string" ? opts.worktree : null;
     }
-    if (opts.outputStyle) extraArgs["output-style"] = opts.outputStyle;
     if (opts.effortLevel) extraArgs["effort"] = opts.effortLevel;
     const driverOpts = {
       cwd: opts.cwd,

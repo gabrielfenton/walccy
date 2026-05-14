@@ -98,7 +98,10 @@ export class Session extends EventEmitter {
     if (opts.worktree !== undefined && opts.worktree !== false) {
       extraArgs['worktree'] = typeof opts.worktree === 'string' ? opts.worktree : null;
     }
-    if (opts.outputStyle) extraArgs['output-style'] = opts.outputStyle;
+    // NOTE: --output-style is not a Claude CLI flag (verified via `claude --help`,
+    // claude-code v2.x). Output style is configured via `/output-style` slash
+    // command or settings JSON instead. Stash the preference on session.info so
+    // the UI can still display it, but don't pass it on the wire.
     if (opts.effortLevel) extraArgs['effort'] = opts.effortLevel;
 
     const driverOpts: ClaudeDriverOptions = {
