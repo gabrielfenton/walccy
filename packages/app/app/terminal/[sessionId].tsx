@@ -86,9 +86,8 @@ function ReadOnlyBanner({
           <Text style={styles.readOnlyBadgeText}>READ-ONLY</Text>
         </View>
         <Text style={styles.readOnlyText} numberOfLines={2}>
-          External session — input not available. Run{' '}
-          <Text style={styles.readOnlyCode}>walccy wrap claude</Text>{' '}
-          in that terminal, or spawn a wrapped session here.
+          External session — input not available. Spawn a session through
+          Walccy to interact with it.
         </Text>
       </View>
       <TouchableOpacity
@@ -97,10 +96,10 @@ function ReadOnlyBanner({
         disabled={spawning || !cwd}
         activeOpacity={0.75}
         accessibilityRole="button"
-        accessibilityLabel={`Open new wrapped session at ${cwd}`}
+        accessibilityLabel={`Open new Walccy session at ${cwd}`}
       >
         <Text style={styles.readOnlySpawnButtonText}>
-          {spawning ? 'Spawning…' : 'Spawn wrapped session here'}
+          {spawning ? 'Spawning…' : 'Spawn a session here'}
         </Text>
       </TouchableOpacity>
       {spawnError ? (
@@ -457,10 +456,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  readOnlyCode: {
-    fontFamily: FontFamily.mono,
-    color: Colors.textPrimary,
   },
   readOnlySpawnButton: {
     alignSelf: 'flex-start',
