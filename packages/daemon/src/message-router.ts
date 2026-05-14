@@ -15,6 +15,7 @@ import { ClientRegistry, ConnectedClient } from './client-registry.js';
 import { handleAuth } from './auth-handler.js';
 import { handleSpawnSession } from './spawn-handler.js';
 import { handleListMemory } from './memory-handler.js';
+import { handleListTranscripts } from './transcript-handler.js';
 import logger from './logger.js';
 
 export interface RouterDeps {
@@ -121,6 +122,12 @@ export class MessageRouter {
           registry: this.deps.registry,
         });
         break;
+      case 'LIST_TRANSCRIPTS':
+        void handleListTranscripts(client, typed, {
+          sessionManager: this.deps.sessionManager,
+          registry: this.deps.registry,
+        });
+        break;
       default: {
         const _exhaustive: never = typed;
         void _exhaustive;
@@ -183,6 +190,19 @@ export class MessageRouter {
           msg.sessionId.length > 0 &&
           (msg.fileName === undefined ||
             (typeof msg.fileName === 'string' && msg.fileName.length <= 256))
+        );
+      case 'LIST_TRANSCRIPTS':
+        return (
+          typeof msg.requestId === 'string' &&
+          msg.requestId.length > 0 &&
+          typeof msg.cwd === 'string' &&
+          msg.cwd.length > 0 &&
+          msg.cwd.length <= 4096 &&
+          (msg.limit === undefined ||
+            (typeof msg.limit === 'number' &&
+              Number.isInteger(msg.limit) &&
+              msg.limit > 0 &&
+              msg.limit <= 200))
         );
       case 'CONTROL_MESSAGE':
         return (
