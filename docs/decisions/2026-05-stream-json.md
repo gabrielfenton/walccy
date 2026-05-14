@@ -1,6 +1,6 @@
 # Walccy — Stream-JSON Migration Spec
 
-**Status:** proposed · **Date:** 2026-05-11 · **Owner:** gabriel
+**Status:** shipped · **Date:** 2026-05-11 → 2026-05-14 · **Owner:** gabriel
 
 ## Problem
 

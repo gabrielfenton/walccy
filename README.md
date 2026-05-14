@@ -1,11 +1,11 @@
 # Walccy
 
-Beautiful mobile dashboard for Claude Code sessions, accessible over Tailscale.
+Mobile chat UI for Claude Code, accessible over Tailscale.
 
 ## What it does
 
-- **Daemon (`walccyd`)** — runs on your laptop/EC2, detects Claude Code sessions, streams output over WebSocket
-- **Mobile app** — Expo/React Native app showing all sessions as tabs, with terminal output, prompt input, and clipboard tools
+- **Daemon (`walccyd`)** — runs on your laptop. Spawns `claude` in stream-json mode and broadcasts structured `SessionEvent`s over WebSocket.
+- **Mobile app** — Expo / React Native chat-style UI. Renders assistant streaming, thinking, tool calls (Bash, Edit, Read, Grep, etc.) and lets you drive sessions from your phone.
 
 ## Setup
 
@@ -32,13 +32,6 @@ walccy pair
 # Scan the QR code with the Walccy mobile app
 ```
 
-### 3. Optional: shell integration (instant session detection)
-
-Add to `~/.bashrc` or `~/.zshrc`:
-```bash
-source ~/.config/walccy/shell-integration.sh
-```
-
 ## Development
 
 ```bash
@@ -56,82 +49,62 @@ npx expo start
 
 ## Architecture
 
-The repo is a small monorepo with three workspaces:
+Small monorepo, three workspaces:
 
 - `packages/protocol/` — types-only package, single source of truth for the wire protocol. Both daemon and app import from `@walccy/protocol`.
-- `packages/daemon/` — Node + TypeScript, ships the `walccy` CLI (daemon + the `walccy claude` wrapper).
-- `packages/app/` — Expo / React Native client.
+- `packages/daemon/` — Node + TypeScript daemon. Spawns `claude` per session, translates raw stream-json events into `SessionEvent`s, broadcasts over WS.
+- `packages/app/` — Expo / React Native chat client.
 
-### Session modes
+### Session lifecycle
 
-A session in walccy can be in one of three modes:
+The daemon spawns Claude Code in stream-json mode:
 
-- **spawn** — daemon owns a `node-pty` directly. Created from the app via `SPAWN_SESSION` (or future CLI flow). Fully bidirectional: input from mobile, output mirrored to all subscribers.
-- **wrap** — a sibling `walccy claude` (or `walccy <cmd>`) process owns the PTY in your existing terminal (Konsole, iTerm, etc.) and streams I/O to the daemon over a Unix socket at `~/.walccy/wrap.sock`. Recommended mode: you keep your normal terminal window working *and* get the mobile mirror.
-- **attach** — the daemon detects an existing `claude` process via `/proc` scanning. Since the TTY-skip fix this is detection-only — the session shows up in the tab bar so you know it exists, but it is read-only (no PTY hijacking).
+```
+claude --input-format stream-json --output-format stream-json \
+       --include-partial-messages --verbose
+```
+
+The app sends `ControlMessage`s (`send_user_message`, `interrupt`, `plan_accept`, `answer_question`, `kill_session`, etc.) and receives `SessionEvent`s (`init`, `status`, `assistant_text_delta`, `thinking_delta`, `tool_use`, `tool_result`, `turn_complete`, `rate_limit`, `error`).
 
 ### Daemon module layout
 
 ```
 index (CLI)
   └─ daemon.ts (orchestrator)
-       ├─ sessionManager      — session lifecycle, mode tagging
+       ├─ sessionManager      — session lifecycle
        ├─ ws-server           — WS orchestrator (see below)
-       ├─ wrap-server         — Unix-socket IPC for `walccy claude`
-       ├─ processScanner      — /proc detection of claude processes
        └─ pushService         — FCM token registry + send
+
+session.ts
+  ├─ claude-spawner          — spawns `claude`, line-delimited JSON reader
+  ├─ stream-translator       — raw Claude event → SessionEvent
+  └─ event-buffer            — ring of SessionEvent per session
 
 ws-server.ts (orchestrator)
   ├─ ws-transport            — WS lifecycle, framing, ping/pong
   ├─ message-router          — auth gate + message dispatch
-  ├─ client-registry         — clients, subscriptions, locks, push tokens
-  └─ notification-dispatcher — broadcast fan-out + FCM
+  ├─ client-registry         — clients, subscriptions, push tokens
+  └─ notification-dispatcher — broadcast fan-out + FCM (push on AskUserQuestion / idle)
 ```
-
-Per-module responsibilities:
-
-- `daemon.ts` — wires everything, owns startup/shutdown.
-- `session-manager.ts` — create/list/destroy sessions, route I/O.
-- `session.ts` — tagged-union `spawn | attach | wrap` session implementations.
-- `wrap-server.ts` — accepts `walccy claude` connections on `~/.walccy/wrap.sock`.
-- `wrap-cli.ts` — the `walccy claude` / `walccy <cmd>` wrapper command.
-- `ws-transport.ts` — raw WS connection handling.
-- `message-router.ts` — AUTH-then-anything gate, dispatch by message type.
-- `client-registry.ts` — per-client state: subs, input lock, push token.
-- `notification-dispatcher.ts` — broadcast to subscribers, fan to FCM.
-- `process-scanner.ts` — periodic `/proc` walk for attach-mode detection.
-- `push.ts` — FCM service-account auth and send.
 
 ### Wire protocol
 
 - Defined in `@walccy/protocol`, imported by both daemon and app — no drift.
 - Line-delimited JSON over a single WebSocket per client.
 - **AUTH gate**: the first message must be `AUTH` with the shared secret; any other message before auth disconnects the client.
-- `HISTORY` messages carry `firstAvailableLine` so a reconnecting client can detect ring-buffer truncation (10k lines/session) and reconcile.
-
-## Quick start
-
-```bash
-# 1. run the daemon (foreground for dev)
-walccy start --foreground
-
-# 2. wrap a terminal session so it mirrors to mobile
-walccy claude            # or: walccy <any-command>
-
-# 3. on the phone: scan QR (`walccy pair`) or enter host/port/secret manually
-```
+- `SessionEventMessage` carries `eventIndex` so a reconnecting client can detect ring-buffer truncation and reconcile.
 
 ## Security posture
 
 - Daemon binds the WebSocket **only** to the Tailscale interface (`100.x.x.x`) by default — no public exposure.
 - Auth via a 32-byte shared secret stored in `~/.config/walccy/config.json` (mode `0600`).
-- WS traffic is cleartext within the tailnet — no TLS. Accepted trade-off: Tailscale already provides transport encryption end-to-end, and adding TLS on top would mean managing certs for ephemeral 100.x addresses.
-- In-memory ring buffer only; no on-disk session logs. No tmux, no screen — pure PTY wrapping.
+- WS traffic is cleartext within the tailnet — no TLS. Tailscale provides transport encryption end-to-end.
+- In-memory event ring buffer only; no on-disk session logs.
 
 ## Tech stack
 
 | | Technology |
 |---|---|
-| Daemon | Node.js 20+, TypeScript, node-pty, ws |
-| App | Expo SDK 52, React Native, Zustand, FlashList |
+| Daemon | Node.js 20+, TypeScript, `@anthropic-ai/claude-agent-sdk`, ws |
+| App | Expo SDK 54, React Native, Zustand, FlashList, react-native-markdown-display |
 | Network | Tailscale (encrypted, no open ports) |
