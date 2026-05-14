@@ -150,13 +150,20 @@ export default function TerminalSessionScreen(): React.ReactElement {
 
   // ── Session subscription ──────────────────────
 
+  // Depend on a stable boolean, not the `session` object: the object gets a
+  // fresh identity on every store update (cost ticks, status changes, …).
+  // Using it as a dep made this effect churn — and because `unsubscribe`
+  // clears the event cursor, every re-run re-subscribed from index 0, so the
+  // daemon resent the full history on a loop. That saturated the JS thread
+  // and starved native→JS events (e.g. TextInput `onChangeText` never fired).
+  const sessionExists = !!session;
   useEffect(() => {
-    if (isNoSession || !session) return;
+    if (isNoSession || !sessionExists) return;
     wsClient.subscribe(sessionId);
     return () => {
       wsClient.unsubscribe(sessionId);
     };
-  }, [sessionId, isNoSession, session]);
+  }, [sessionId, isNoSession, sessionExists]);
 
   // Keep `activeSessionId` in lockstep with the URL so deep-links, browser
   // back, and tab swaps all reach Settings (F25/F26 gating) and other
