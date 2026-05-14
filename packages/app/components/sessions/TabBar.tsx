@@ -103,6 +103,7 @@ export const TabBar: React.FC<TabBarProps> = ({
           activeOpacity={0.75}
           accessibilityRole="button"
           accessibilityLabel="Add session"
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Text style={styles.addButtonText}>+</Text>
         </TouchableOpacity>
