@@ -127,6 +127,19 @@ export interface ListMemoryMessage {
   fileName?: string;
 }
 
+/**
+ * Resumable-transcript listing. Returns metadata for `*.jsonl` files under
+ * `~/.claude/projects/<encoded-cwd>/`. Used by the New Session sheet to
+ * surface a picker for resumes coming from a laptop `claude` session.
+ */
+export interface ListTranscriptsMessage {
+  type: 'LIST_TRANSCRIPTS';
+  requestId: string;
+  cwd: string;
+  /** Cap on returned entries; daemon may apply its own ceiling. */
+  limit?: number;
+}
+
 export type ClientMessage =
   | AuthMessage
   | ListSessionsMessage
@@ -137,6 +150,7 @@ export type ClientMessage =
   | ListDirectoriesMessage
   | SpawnSessionMessage
   | ListMemoryMessage
+  | ListTranscriptsMessage
   | ControlMessageEnvelope;
 
 // Note: session termination is delivered via `ControlMessage` of kind
@@ -256,6 +270,35 @@ export interface MemoryListMessage {
   error?: string;
 }
 
+export interface TranscriptEntry {
+  /** Claude session UUID — equals the JSONL filename stem. */
+  sessionId: string;
+  /** mtime epoch ms. */
+  modifiedAt: number;
+  /** Bytes on disk. */
+  sizeBytes: number;
+  /**
+   * First user-message text, truncated to ~80 chars. `null` when the file
+   * has been opened but no user message was found in the first 4KB window.
+   */
+  preview: string | null;
+  /** Line count of the JSONL — cheap message-count proxy. */
+  messageCount: number;
+  /** True when this sessionId is currently live in the daemon. */
+  isLive: boolean;
+}
+
+export interface TranscriptListMessage {
+  type: 'TRANSCRIPT_LIST';
+  requestId: string;
+  cwd: string;
+  /** Absolute directory the entries were read from. */
+  dir: string;
+  entries: TranscriptEntry[];
+  /** Set on failure — short reason. `entries` will be empty when set. */
+  error?: string;
+}
+
 export type ServerMessage =
   | AuthOkMessage
   | AuthFailMessage
@@ -269,7 +312,8 @@ export type ServerMessage =
   | ErrorMessage
   | DirectoryListMessage
   | SpawnResultMessage
-  | MemoryListMessage;
+  | MemoryListMessage
+  | TranscriptListMessage;
 
 // ──────────────────────────────────────────────
 // Re-exports
