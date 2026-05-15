@@ -26,6 +26,7 @@ import { wsClient } from '../../services/ws-client';
 import { TabBar } from '../../components/sessions/TabBar';
 import { NewSessionSheet } from '../../components/sessions/NewSessionSheet';
 import { SessionHeader } from '../../components/chat/SessionHeader';
+import { useKeyboardHeight } from '../../hooks/useKeyboardHeight';
 
 // ── Offline-too-long banner ───────────────────
 //
@@ -145,6 +146,18 @@ export default function TerminalLayout(): React.ReactElement {
 
   const [newSessionSheetVisible, setNewSessionSheetVisible] = useState(false);
 
+  // Lift the layout above the keyboard. Expo SDK 54 edge-to-edge breaks both
+  // `adjustResize` and `adjustPan` (the RN view tree never moves out from
+  // behind the IME), so on Android we shrink the SafeAreaView by the live
+  // keyboard height — the `flex:1` content area absorbs it and the
+  // bottom-pinned Composer lands right above the keyboard. iOS still uses the
+  // KAV `padding` behavior below.
+  const keyboardHeight = useKeyboardHeight();
+  const androidKeyboardPad =
+    Platform.OS === 'android' && keyboardHeight > 0
+      ? { paddingBottom: keyboardHeight }
+      : null;
+
   // Cold-start / post-kill recovery: the entry route is always
   // `/terminal/no-session`, but if the daemon already has sessions (app
   // relaunched, or the user just killed the active one while others
@@ -204,7 +217,7 @@ export default function TerminalLayout(): React.ReactElement {
       // chrome is ever added above this KAV.
       keyboardVerticalOffset={0}
     >
-    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={[styles.safeArea, androidKeyboardPad]} edges={['top', 'left', 'right']}>
       {/* Header */}
       <HeaderBar />
 
