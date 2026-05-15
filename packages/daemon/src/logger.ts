@@ -65,7 +65,9 @@ if (isForeground) {
 }
 
 const logger = winston.createLogger({
-  level: process.env['WALCCY_LOG_LEVEL'] ?? 'info',
+  // Use `||` not `??` so an empty WALCCY_LOG_LEVEL ('') falls back to 'info'
+  // rather than setting an invalid log level.
+  level: process.env['WALCCY_LOG_LEVEL'] || 'info',
   transports,
 });
 
