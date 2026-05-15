@@ -86,9 +86,6 @@ class WsClient {
   /** Sessions we should be subscribed to (survives reconnects). */
   private activeSubscriptions: Set<string> = new Set();
 
-  /** Highest event index we've applied per session (for resume gap-fill). */
-  private lastEventIndex: Map<string, number> = new Map();
-
   private lastFcmTokenRegistered: string | null = null;
 
   private pendingSpawns = new PendingRequests<string>();
@@ -168,7 +165,6 @@ class WsClient {
     this.ping.stop();
     this.clearAuthTimeout();
     this.activeSubscriptions.clear();
-    this.lastEventIndex.clear();
     this.rejectAllPending(new Error('Disconnected'));
 
     this.closeSocketSilently();
@@ -187,14 +183,16 @@ class WsClient {
 
   subscribe(sessionId: string): void {
     this.activeSubscriptions.add(sessionId);
-    const cursor = this.lastEventIndex.get(sessionId);
-    const fromEventIndex = cursor !== undefined ? cursor + 1 : 0;
-    this.send({ type: 'SUBSCRIBE', sessionId, fromEventIndex });
+    // Always request the full buffer. The daemon's HISTORY response is applied
+    // via messagesStore.setHistory, which *replaces* the session buffer — a
+    // partial range (resume-from-cursor) would make it replace the rendered
+    // conversation with an empty/short slice. The ring buffer is bounded, so
+    // re-sending it on every (re)subscribe is cheap and always correct.
+    this.send({ type: 'SUBSCRIBE', sessionId, fromEventIndex: 0 });
   }
 
   unsubscribe(sessionId: string): void {
     this.activeSubscriptions.delete(sessionId);
-    this.lastEventIndex.delete(sessionId);
     this.send({ type: 'UNSUBSCRIBE', sessionId });
   }
 
@@ -234,7 +232,6 @@ class WsClient {
 
   killSession(sessionId: string): void {
     this.activeSubscriptions.delete(sessionId);
-    this.lastEventIndex.delete(sessionId);
     this.sendControl(sessionId, { type: 'kill_session', sessionId });
   }
 
@@ -455,7 +452,7 @@ class WsClient {
         );
         this.ping.start();
         this.listSessions();
-        // Re-subscribe (resumes from lastEventIndex+1).
+        // Re-subscribe — each subscribe re-fetches the full session buffer.
         for (const sessionId of Array.from(this.activeSubscriptions)) {
           this.subscribe(sessionId);
         }
@@ -505,7 +502,6 @@ class WsClient {
         sessionsStore.getState().removeSession(msg.sessionId);
         messagesStore.getState().clear(msg.sessionId);
         initMetadataStore.getState().clear(msg.sessionId);
-        this.lastEventIndex.delete(msg.sessionId);
         break;
       }
 
@@ -524,13 +520,6 @@ class WsClient {
             break;
           }
         }
-        // History events came from the ring buffer (which is index-tracked
-        // on the daemon side). The HISTORY envelope doesn't carry per-event
-        // indices, so we trust the daemon's totalEvents - 1 as the highest
-        // index we've now seen.
-        if (msg.totalEvents > 0) {
-          this.lastEventIndex.set(msg.sessionId, msg.totalEvents - 1);
-        }
         break;
       }
 
@@ -540,10 +529,6 @@ class WsClient {
           .applyEvent(msg.sessionId, msg.event, msg.eventIndex);
         if (msg.event.kind === 'init') {
           initMetadataStore.getState().set(msg.sessionId, msg.event);
-        }
-        const prev = this.lastEventIndex.get(msg.sessionId) ?? -1;
-        if (msg.eventIndex > prev) {
-          this.lastEventIndex.set(msg.sessionId, msg.eventIndex);
         }
         break;
       }
