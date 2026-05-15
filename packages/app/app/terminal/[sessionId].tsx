@@ -205,13 +205,9 @@ export default function TerminalSessionScreen(): React.ReactElement {
 
   // ── Open handlers ─────────────────────────────
 
-  const handleOpenClipboard = useCallback(() => {
-    // (Reserved for header / Composer overflow menu — F23+ will surface
-    // clipboard-history from a chip near the Composer.)
-    setShowClipboardHistory(true);
+  const handleOpenPromptBoard = useCallback(() => {
+    setShowPromptLibrary(true);
   }, []);
-  // Silence unused-var until the menu lands:
-  void handleOpenClipboard;
 
   // ── Clipboard bubble paste ────────────────────
 
@@ -227,17 +223,6 @@ export default function TerminalSessionScreen(): React.ReactElement {
     setShowBubble(false);
     clipboardService.hideBubble();
   }, []);
-
-  // ── Prompt library select ─────────────────────
-
-  const handleSelectPrompt = useCallback(
-    (content: string) => {
-      if (sessionId) {
-        wsClient.sendUserText(sessionId, content);
-      }
-    },
-    [sessionId]
-  );
 
   // ── Save to prompt library from ClipboardPopup ─
 
@@ -321,7 +306,7 @@ export default function TerminalSessionScreen(): React.ReactElement {
       {!isReadOnly && !showEmpty && sessionId && (
         <>
           <SlashCommandStrip sessionId={sessionId} />
-          <Composer sessionId={sessionId} />
+          <Composer sessionId={sessionId} onOpenPromptBoard={handleOpenPromptBoard} />
         </>
       )}
 
@@ -346,7 +331,6 @@ export default function TerminalSessionScreen(): React.ReactElement {
       <PromptLibrarySheet
         isVisible={showPromptLibrary}
         onClose={() => setShowPromptLibrary(false)}
-        onSelectPrompt={handleSelectPrompt}
         activeSessionId={sessionId ?? null}
       />
 

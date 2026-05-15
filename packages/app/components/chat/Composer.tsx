@@ -28,11 +28,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync, EncodingType } from 'expo-file-system/legacy';
 import { useSessionsStore } from '../../stores/sessions.store';
+import { useComposerDraftStore } from '../../stores/composer-draft.store';
 import { useShallow } from 'zustand/react/shallow';
 import { wsClient } from '../../services/ws-client';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize } from '../../constants/typography';
 import { WInput } from '../ui/WInput';
+import { Icon } from '../ui/Icon';
 import type { PermissionMode, UserContentBlock } from '@walccy/protocol';
 
 const MODE_OPTIONS: ReadonlyArray<{ mode: PermissionMode; label: string }> = [
@@ -53,9 +55,10 @@ interface Attachment {
 
 interface ComposerProps {
   sessionId: string;
+  onOpenPromptBoard?: () => void;
 }
 
-export function Composer({ sessionId }: ComposerProps): React.ReactElement {
+export function Composer({ sessionId, onOpenPromptBoard }: ComposerProps): React.ReactElement {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -77,6 +80,25 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
       hideSub.remove();
     };
   }, []);
+
+  // Consume pending paste from the Prompt Board / clipboard sheets.
+  // Replaces empty input; appends with a newline if there's already a draft
+  // so we don't clobber typing in progress.
+  const pendingPaste = useComposerDraftStore((s) => s.pending[sessionId]);
+  const clearPaste = useComposerDraftStore((s) => s.clearPaste);
+  const lastConsumedNonceRef = useRef<number>(0);
+  useEffect(() => {
+    if (!pendingPaste) return;
+    if (pendingPaste.nonce === lastConsumedNonceRef.current) return;
+    lastConsumedNonceRef.current = pendingPaste.nonce;
+    setText((prev) => {
+      const trimmed = prev.trimEnd();
+      if (trimmed.length === 0) return pendingPaste.text;
+      return trimmed + '\n' + pendingPaste.text;
+    });
+    clearPaste(sessionId);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [pendingPaste, sessionId, clearPaste]);
 
   // The session is "streaming" while it is generating a turn — drive the
   // stop/send swap from the daemon-reported status.
@@ -330,6 +352,18 @@ export function Composer({ sessionId }: ComposerProps): React.ReactElement {
         </View>
       ) : null}
       <View style={styles.inputRow}>
+        {onOpenPromptBoard ? (
+          <TouchableOpacity
+            style={[styles.button, styles.plusButton]}
+            onPress={onOpenPromptBoard}
+            activeOpacity={0.75}
+            disabled={streaming}
+            accessibilityRole="button"
+            accessibilityLabel="Open Prompt Board"
+          >
+            <Icon name="bookmark" size={18} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        ) : null}
         {!atCap ? (
           <TouchableOpacity
             style={[styles.button, styles.plusButton]}

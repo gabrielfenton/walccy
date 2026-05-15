@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useShallow } from 'zustand/react/shallow';
 import { useClipboardHistoryStore, type ClipboardEntry } from '../../stores/clipboard-history.store';
+import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { Spacing } from '../../constants/spacing';
@@ -96,6 +97,9 @@ export function ClipboardHistorySheet({
   } | null>(null);
   const [menu, setMenu] = useState<MenuState>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [savingAsSnippet, setSavingAsSnippet] = useState<ClipboardEntry | null>(null);
+
+  const addPrompt = usePromptLibraryStore((s) => s.addPrompt);
 
   // Reset transient state on close
   useEffect(() => {
@@ -105,8 +109,25 @@ export function ClipboardHistorySheet({
       setPendingPaste(null);
       setMenu(null);
       setConfirmClear(false);
+      setSavingAsSnippet(null);
     }
   }, [isVisible]);
+
+  const handleSaveAsSnippetSubmit = useCallback(
+    (title: string) => {
+      const trimmed = title.trim();
+      if (trimmed && savingAsSnippet) {
+        addPrompt({
+          title: trimmed,
+          content: savingAsSnippet.content,
+          tags: [],
+          isPinned: false,
+        });
+      }
+      setSavingAsSnippet(null);
+    },
+    [savingAsSnippet, addPrompt],
+  );
 
   // ── Paste flow ────────────────────────────────
 
@@ -282,6 +303,11 @@ export function ClipboardHistorySheet({
       });
     }
     items.push({
+      label: 'Save as snippet…',
+      iconName: 'bookmark',
+      onPress: () => setSavingAsSnippet(entry),
+    });
+    items.push({
       label: entry.pinned ? 'Unpin' : 'Pin',
       iconName: 'bookmark',
       onPress: () => togglePin(entry.id),
@@ -406,6 +432,15 @@ export function ClipboardHistorySheet({
               ]
             : []
         }
+      />
+
+      {/* Save as snippet — title prompt */}
+      <TextInputModal
+        visible={savingAsSnippet !== null}
+        title="Save as snippet"
+        message="Enter a title for this snippet:"
+        onSubmit={handleSaveAsSnippetSubmit}
+        onCancel={() => setSavingAsSnippet(null)}
       />
 
       {/* Clear-unpinned confirmation */}

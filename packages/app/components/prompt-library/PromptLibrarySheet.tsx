@@ -18,6 +18,13 @@ import { TextInputModal } from '../ui/TextInputModal';
 import { WInput } from '../ui/WInput';
 import { usePromptLibraryStore } from '../../stores/prompt-library.store';
 import type { Prompt } from '../../stores/prompt-library.store';
+import {
+  useClipboardHistoryStore,
+  type ClipboardEntry,
+} from '../../stores/clipboard-history.store';
+import { useComposerDraftStore } from '../../stores/composer-draft.store';
+import { wsClient } from '../../services/ws-client';
+import * as Clipboard from 'expo-clipboard';
 import { PromptSearchBar } from './PromptSearchBar';
 import { PromptItem } from './PromptItem';
 import { Colors } from '../../constants/colors';
@@ -27,6 +34,7 @@ import { SheetShell } from '../ui/SheetShell';
 import { SheetHeader } from '../ui/SheetHeader';
 import { SheetSectionHeader } from '../ui/SheetSectionHeader';
 import { ActionSheet, type ActionSheetItem } from '../ui/ActionSheet';
+import { Icon } from '../ui/Icon';
 
 // ──────────────────────────────────────────────
 // Props
@@ -35,8 +43,15 @@ import { ActionSheet, type ActionSheetItem } from '../ui/ActionSheet';
 interface PromptLibrarySheetProps {
   isVisible: boolean;
   onClose: () => void;
-  onSelectPrompt: (content: string) => void;
+  /** Active session — destination for paste / send-now. */
   activeSessionId: string | null;
+}
+
+const MAX_CLIPBOARD_IN_BOARD = 10;
+
+function clipboardPreview(s: string): string {
+  const flat = s.replace(/\n/g, ' ');
+  return flat.length > 80 ? flat.slice(0, 80) + '…' : flat;
 }
 
 // ──────────────────────────────────────────────
@@ -180,7 +195,13 @@ const formStyles = StyleSheet.create({
 
 type ListItem =
   | { kind: 'section'; id: string; title: string }
-  | { kind: 'prompt'; id: string; prompt: Prompt };
+  | { kind: 'prompt'; id: string; prompt: Prompt }
+  | { kind: 'clipboard'; id: string; entry: ClipboardEntry };
+
+type RowMenu =
+  | { kind: 'prompt'; prompt: Prompt }
+  | { kind: 'clipboard'; entry: ClipboardEntry }
+  | null;
 
 // ──────────────────────────────────────────────
 // Main component
@@ -189,13 +210,15 @@ type ListItem =
 export function PromptLibrarySheet({
   isVisible,
   onClose,
-  onSelectPrompt,
+  activeSessionId,
 }: PromptLibrarySheetProps): React.ReactElement {
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewForm, setShowNewForm] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
-  const [menuPrompt, setMenuPrompt] = useState<Prompt | null>(null);
+  const [rowMenu, setRowMenu] = useState<RowMenu>(null);
   const [confirmDelete, setConfirmDelete] = useState<Prompt | null>(null);
+  const [savingClipboardAsSnippet, setSavingClipboardAsSnippet] =
+    useState<ClipboardEntry | null>(null);
 
   const {
     prompts,
@@ -219,30 +242,99 @@ export function PromptLibrarySheet({
     })),
   );
 
+  const {
+    clipboardEntries,
+    togglePinClipboard,
+    removeClipboard,
+  } = useClipboardHistoryStore(
+    useShallow((s) => ({
+      clipboardEntries: s.entries,
+      togglePinClipboard: s.togglePin,
+      removeClipboard: s.remove,
+    })),
+  );
+
+  const pushPaste = useComposerDraftStore((s) => s.pushPaste);
+
   // Reset transient UI state when the sheet closes
   useEffect(() => {
     if (!isVisible) {
       setSearchQuery('');
       setShowNewForm(false);
-      setMenuPrompt(null);
+      setRowMenu(null);
       setConfirmDelete(null);
+      setSavingClipboardAsSnippet(null);
     }
   }, [isVisible]);
+
+  // ── Shared paste / send ───────────────────────
+
+  const pasteToComposer = useCallback(
+    (content: string) => {
+      if (!activeSessionId) {
+        Alert.alert('No active session', 'Open a session first to paste here.');
+        return;
+      }
+      pushPaste(activeSessionId, content);
+      onClose();
+    },
+    [activeSessionId, pushPaste, onClose],
+  );
+
+  const sendNow = useCallback(
+    (content: string) => {
+      if (!activeSessionId) {
+        Alert.alert('No active session', 'Open a session first.');
+        return;
+      }
+      wsClient.sendUserText(activeSessionId, content);
+      onClose();
+    },
+    [activeSessionId, onClose],
+  );
 
   // ── Prompt actions ────────────────────────────
 
   const handleSelectPrompt = useCallback(
     (prompt: Prompt) => {
       recordUse(prompt.id);
-      onSelectPrompt(prompt.content);
-      onClose();
+      pasteToComposer(prompt.content);
     },
-    [recordUse, onSelectPrompt, onClose],
+    [recordUse, pasteToComposer],
   );
 
   const handleLongPress = useCallback((prompt: Prompt) => {
-    setMenuPrompt(prompt);
+    setRowMenu({ kind: 'prompt', prompt });
   }, []);
+
+  // ── Clipboard actions ─────────────────────────
+
+  const handleSelectClipboard = useCallback(
+    (entry: ClipboardEntry) => {
+      pasteToComposer(entry.content);
+    },
+    [pasteToComposer],
+  );
+
+  const handleLongPressClipboard = useCallback((entry: ClipboardEntry) => {
+    setRowMenu({ kind: 'clipboard', entry });
+  }, []);
+
+  const handleSaveClipboardAsSnippet = useCallback(
+    (title: string) => {
+      const trimmed = title.trim();
+      if (trimmed && savingClipboardAsSnippet) {
+        addPrompt({
+          title: trimmed,
+          content: savingClipboardAsSnippet.content,
+          tags: [],
+          isPinned: false,
+        });
+      }
+      setSavingClipboardAsSnippet(null);
+    },
+    [savingClipboardAsSnippet, addPrompt],
+  );
 
   const handleEditTitleSubmit = useCallback(
     (newTitle: string) => {
@@ -266,39 +358,94 @@ export function PromptLibrarySheet({
   // ── Action menu items ─────────────────────────
 
   const menuItems: ActionSheetItem[] = useMemo(() => {
-    if (!menuPrompt) return [];
+    if (!rowMenu) return [];
+
+    if (rowMenu.kind === 'prompt') {
+      const prompt = rowMenu.prompt;
+      return [
+        {
+          label: 'Send now',
+          iconName: 'send',
+          onPress: () => {
+            recordUse(prompt.id);
+            sendNow(prompt.content);
+          },
+        },
+        {
+          label: 'Edit title',
+          iconName: 'edit-3',
+          onPress: () => setEditingPrompt(prompt),
+        },
+        {
+          label: prompt.isPinned ? 'Unpin' : 'Pin',
+          iconName: 'bookmark',
+          onPress: () =>
+            updatePrompt(prompt.id, { isPinned: !prompt.isPinned }),
+        },
+        {
+          label: 'Delete',
+          iconName: 'trash-2',
+          style: 'destructive',
+          onPress: () => setConfirmDelete(prompt),
+        },
+      ];
+    }
+
+    const entry = rowMenu.entry;
     return [
       {
-        label: 'Edit title',
-        iconName: 'edit-3',
-        onPress: () => setEditingPrompt(menuPrompt),
+        label: 'Send now',
+        iconName: 'send',
+        onPress: () => sendNow(entry.content),
       },
       {
-        label: menuPrompt.isPinned ? 'Unpin' : 'Pin',
+        label: 'Save as snippet…',
         iconName: 'bookmark',
-        onPress: () =>
-          updatePrompt(menuPrompt.id, { isPinned: !menuPrompt.isPinned }),
+        onPress: () => setSavingClipboardAsSnippet(entry),
+      },
+      {
+        label: entry.pinned ? 'Unpin' : 'Pin',
+        iconName: 'bookmark',
+        onPress: () => togglePinClipboard(entry.id),
+      },
+      {
+        label: 'Copy to system',
+        iconName: 'copy',
+        onPress: () => {
+          void Clipboard.setStringAsync(entry.content);
+        },
       },
       {
         label: 'Delete',
         iconName: 'trash-2',
         style: 'destructive',
-        onPress: () => setConfirmDelete(menuPrompt),
+        onPress: () => removeClipboard(entry.id),
       },
     ];
-  }, [menuPrompt, updatePrompt]);
+  }, [rowMenu, updatePrompt, recordUse, sendNow, togglePinClipboard, removeClipboard]);
 
   // ── Build list data ───────────────────────────
 
   const listData: ListItem[] = useMemo(() => {
     const items: ListItem[] = [];
+    const q = searchQuery.trim().toLowerCase();
 
-    if (searchQuery.trim()) {
-      const results = searchPrompts(searchQuery);
-      if (results.length > 0) {
-        items.push({ kind: 'section', id: 'search-header', title: 'Results' });
-        results.forEach((p) =>
+    if (q) {
+      const promptResults = searchPrompts(searchQuery);
+      const clipboardResults = clipboardEntries.filter((e) =>
+        e.content.toLowerCase().includes(q),
+      );
+
+      if (promptResults.length > 0) {
+        items.push({ kind: 'section', id: 'search-snippets', title: 'Snippets' });
+        promptResults.forEach((p) =>
           items.push({ kind: 'prompt', id: p.id, prompt: p }),
+        );
+      }
+      if (clipboardResults.length > 0) {
+        items.push({ kind: 'section', id: 'search-clipboard', title: 'Clipboard' });
+        clipboardResults.forEach((e) =>
+          items.push({ kind: 'clipboard', id: 'c-' + e.id, entry: e }),
         );
       }
       return items;
@@ -317,30 +464,68 @@ export function PromptLibrarySheet({
     const recentFiltered = recent.filter((p) => !pinnedIds.has(p.id));
 
     if (recentFiltered.length > 0) {
-      items.push({ kind: 'section', id: 'recent-header', title: 'Recent' });
+      items.push({ kind: 'section', id: 'recent-header', title: 'Recent snippets' });
       recentFiltered.forEach((p) =>
         items.push({ kind: 'prompt', id: p.id, prompt: p }),
       );
     }
 
+    // Clipboard section — show pinned clipboard first, then recent unpinned,
+    // capped to keep the board manageable.
+    const cbPinned = clipboardEntries.filter((e) => e.pinned);
+    const cbUnpinned = clipboardEntries
+      .filter((e) => !e.pinned)
+      .slice(0, MAX_CLIPBOARD_IN_BOARD);
+    const cbAll = [...cbPinned, ...cbUnpinned];
+
+    if (cbAll.length > 0) {
+      items.push({ kind: 'section', id: 'clipboard-header', title: 'Clipboard' });
+      cbAll.forEach((e) =>
+        items.push({ kind: 'clipboard', id: 'c-' + e.id, entry: e }),
+      );
+    }
+
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- store methods are stable via get()
-  }, [searchQuery, prompts]);
+  }, [searchQuery, prompts, clipboardEntries]);
 
   const renderItem = useCallback(
     ({ item }: { item: ListItem }) => {
       if (item.kind === 'section') {
         return <SheetSectionHeader title={item.title} />;
       }
+      if (item.kind === 'prompt') {
+        return (
+          <PromptItem
+            prompt={item.prompt}
+            onPress={() => handleSelectPrompt(item.prompt)}
+            onLongPress={() => handleLongPress(item.prompt)}
+          />
+        );
+      }
+      const e = item.entry;
       return (
-        <PromptItem
-          prompt={item.prompt}
-          onPress={() => handleSelectPrompt(item.prompt)}
-          onLongPress={() => handleLongPress(item.prompt)}
-        />
+        <TouchableOpacity
+          style={styles.clipboardRow}
+          onPress={() => handleSelectClipboard(e)}
+          onLongPress={() => handleLongPressClipboard(e)}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={`Paste clipboard entry: ${clipboardPreview(e.content)}`}
+        >
+          <Icon
+            name="clipboard"
+            size={14}
+            color={e.pinned ? Colors.accent : Colors.textSecondary}
+            style={styles.clipboardIcon}
+          />
+          <Text style={styles.clipboardText} numberOfLines={2}>
+            {clipboardPreview(e.content)}
+          </Text>
+        </TouchableOpacity>
       );
     },
-    [handleSelectPrompt, handleLongPress],
+    [handleSelectPrompt, handleLongPress, handleSelectClipboard, handleLongPressClipboard],
   );
 
   const keyExtractor = useCallback((item: ListItem) => item.id, []);
@@ -412,9 +597,15 @@ export function PromptLibrarySheet({
 
       {/* Long-press action menu */}
       <ActionSheet
-        isVisible={menuPrompt !== null}
-        onClose={() => setMenuPrompt(null)}
-        title={menuPrompt?.title}
+        isVisible={rowMenu !== null}
+        onClose={() => setRowMenu(null)}
+        title={
+          rowMenu?.kind === 'prompt'
+            ? rowMenu.prompt.title
+            : rowMenu?.kind === 'clipboard'
+              ? clipboardPreview(rowMenu.entry.content)
+              : undefined
+        }
         actions={menuItems}
       />
 
@@ -436,6 +627,15 @@ export function PromptLibrarySheet({
               ]
             : []
         }
+      />
+
+      {/* Save clipboard entry as snippet — title prompt */}
+      <TextInputModal
+        visible={savingClipboardAsSnippet !== null}
+        title="Save as snippet"
+        message="Enter a title for this snippet:"
+        onSubmit={handleSaveClipboardAsSnippet}
+        onCancel={() => setSavingClipboardAsSnippet(null)}
       />
     </>
   );
@@ -471,5 +671,25 @@ const styles = StyleSheet.create({
     fontSize: FontSize.caption,
     textAlign: 'center',
     paddingHorizontal: Spacing.xxxl,
+  },
+
+  clipboardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  clipboardIcon: {
+    marginTop: 1,
+  },
+  clipboardText: {
+    flex: 1,
+    color: Colors.textPrimary,
+    fontFamily: FontFamily.mono,
+    fontSize: FontSize.body,
+    lineHeight: 20,
   },
 });
