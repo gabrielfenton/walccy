@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
-import { Stack, router } from 'expo-router';
+import { Stack, router, usePathname } from 'expo-router';
 import { Colors } from '../../constants/colors';
 import { FontFamily, FontSize, FontWeight } from '../../constants/typography';
 import { useSessionsStore } from '../../stores/sessions.store';
@@ -158,22 +158,27 @@ export default function TerminalLayout(): React.ReactElement {
       ? { paddingBottom: keyboardHeight }
       : null;
 
-  // Cold-start / post-kill recovery: the entry route is always
-  // `/terminal/no-session`, but if the daemon already has sessions (app
-  // relaunched, or the user just killed the active one while others
-  // remain) we shouldn't strand the user on the empty state with a
-  // populated tab bar.  Jump to the most-recently-active session.
+  // Cold-start / post-kill / post-reconnect recovery: connect.tsx always
+  // routes to `/terminal/no-session`, but if the daemon already has
+  // sessions we shouldn't strand the user on the empty state with a
+  // populated tab bar.  Whenever we're on the no-session route and any
+  // sessions exist, jump to the previously-active one if it still exists,
+  // else the most-recently-active session.
+  const pathname = usePathname();
   useEffect(() => {
-    if (activeSessionId) return;
+    if (pathname !== '/terminal/no-session') return;
     if (sessions.length === 0) return;
-    const mostRecent = [...sessions].sort(
-      (a, b) => b.lastActivityAt - a.lastActivityAt,
-    )[0];
-    if (mostRecent) {
-      setActiveSession(mostRecent.id);
-      router.replace(`/terminal/${mostRecent.id}`);
+    const preserved = activeSessionId
+      ? sessions.find((s) => s.id === activeSessionId)
+      : null;
+    const target =
+      preserved ??
+      [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
+    if (target) {
+      setActiveSession(target.id);
+      router.replace(`/terminal/${target.id}`);
     }
-  }, [activeSessionId, sessions, setActiveSession]);
+  }, [pathname, activeSessionId, sessions, setActiveSession]);
 
   function handleSelectSession(id: string): void {
     setActiveSession(id);
