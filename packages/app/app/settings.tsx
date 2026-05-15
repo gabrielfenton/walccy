@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import Constants from 'expo-constants';
 import { useShallow } from 'zustand/react/shallow';
 import { useSettingsStore } from '../stores/settings.store';
 import { useConnectionStore } from '../stores/connection.store';
@@ -619,7 +620,9 @@ export default function SettingsScreen(): React.ReactElement {
         <SectionHeader title="About" />
         <View style={styles.card}>
           <Row label="App Version">
-            <Text style={styles.valueText}>1.0.0</Text>
+            <Text style={styles.valueText}>
+              {Constants.expoConfig?.version ?? '—'}
+            </Text>
           </Row>
           <Row label="Daemon Version">
             <Text style={styles.valueText}>{daemonVersion ?? '—'}</Text>
