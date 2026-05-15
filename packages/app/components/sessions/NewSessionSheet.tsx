@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -429,53 +430,64 @@ export function NewSessionSheet({
                     No prior sessions in this directory.
                   </Text>
                 ) : (
-                  transcripts.slice(0, 5).map((t) => {
-                    const selected = resumeSessionId === t.sessionId;
-                    const disabled = t.isLive;
-                    const idShort = t.sessionId.slice(0, 8);
-                    return (
-                      <TouchableOpacity
-                        key={t.sessionId}
-                        style={[
-                          styles.transcriptRow,
-                          selected && styles.transcriptRowSelected,
-                          disabled && styles.transcriptRowDisabled,
-                        ]}
-                        activeOpacity={0.7}
-                        disabled={disabled}
-                        onPress={() =>
-                          setResumeSessionId(
-                            selected ? '' : t.sessionId,
-                          )
-                        }
-                        accessibilityRole="button"
-                        accessibilityLabel={`Resume session ${idShort}`}
-                        accessibilityState={{ selected, disabled }}
-                      >
-                        <View style={styles.transcriptRowMain}>
-                          <Text
-                            style={styles.transcriptPreview}
-                            numberOfLines={1}
-                          >
-                            {t.preview ?? '(no preview available)'}
-                          </Text>
-                          <Text style={styles.transcriptMeta} numberOfLines={1}>
-                            {formatRelativeTime(t.modifiedAt)}
-                            {' · '}
-                            {t.messageCount} msgs
-                            {' · '}
-                            {idShort}…
-                          </Text>
-                        </View>
-                        {disabled && (
-                          <Text style={styles.transcriptLiveTag}>running</Text>
-                        )}
-                        {selected && !disabled && (
-                          <Text style={styles.transcriptSelectedTag}>✓</Text>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })
+                  // Cap the scrolling area so a long transcript list can't
+                  // starve the outer FlatList of touchable height when the
+                  // sheet is short — without this the spawn rows render off
+                  // the sheet with [0,0] a11y bounds.
+                  <ScrollView
+                    style={styles.transcriptScroll}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {transcripts.map((t) => {
+                      const selected = resumeSessionId === t.sessionId;
+                      const disabled = t.isLive;
+                      const idShort = t.sessionId.slice(0, 8);
+                      return (
+                        <TouchableOpacity
+                          key={t.sessionId}
+                          style={[
+                            styles.transcriptRow,
+                            selected && styles.transcriptRowSelected,
+                            disabled && styles.transcriptRowDisabled,
+                          ]}
+                          activeOpacity={0.7}
+                          disabled={disabled}
+                          onPress={() =>
+                            setResumeSessionId(
+                              selected ? '' : t.sessionId,
+                            )
+                          }
+                          accessibilityRole="button"
+                          accessibilityLabel={`Resume session ${idShort}`}
+                          accessibilityState={{ selected, disabled }}
+                        >
+                          <View style={styles.transcriptRowMain}>
+                            <Text
+                              style={styles.transcriptPreview}
+                              numberOfLines={1}
+                            >
+                              {t.preview ?? '(no preview available)'}
+                            </Text>
+                            <Text style={styles.transcriptMeta} numberOfLines={1}>
+                              {formatRelativeTime(t.modifiedAt)}
+                              {' · '}
+                              {t.messageCount} msgs
+                              {' · '}
+                              {idShort}…
+                            </Text>
+                          </View>
+                          {disabled && (
+                            <Text style={styles.transcriptLiveTag}>running</Text>
+                          )}
+                          {selected && !disabled && (
+                            <Text style={styles.transcriptSelectedTag}>✓</Text>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
                 )}
               </View>
             )}
@@ -534,10 +546,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: 4,
     paddingBottom: 6,
+    flexShrink: 1,
   },
   transcriptSection: {
     marginBottom: 10,
     paddingTop: 4,
+    flexShrink: 1,
+  },
+  transcriptScroll: {
+    // Cap to ~2.5 rows; user scrolls within for more. This is the only
+    // thing keeping the advanced section from growing past the sheet and
+    // starving the spawn FlatList below — keep it tight.
+    maxHeight: 130,
   },
   transcriptHeader: {
     color: Colors.textSecondary,

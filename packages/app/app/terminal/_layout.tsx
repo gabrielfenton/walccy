@@ -6,13 +6,15 @@
 //   3. Stack navigator for session content
 // ──────────────────────────────────────────────
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  Dimensions,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -146,16 +148,24 @@ export default function TerminalLayout(): React.ReactElement {
 
   const [newSessionSheetVisible, setNewSessionSheetVisible] = useState(false);
 
-  // Lift the layout above the keyboard. Expo SDK 54 edge-to-edge breaks both
-  // `adjustResize` and `adjustPan` (the RN view tree never moves out from
-  // behind the IME), so on Android we shrink the SafeAreaView by the live
-  // keyboard height — the `flex:1` content area absorbs it and the
-  // bottom-pinned Composer lands right above the keyboard. iOS still uses the
-  // KAV `padding` behavior below.
+  // Lift the layout above the keyboard. On Expo SDK 54 edge-to-edge, the
+  // Android OS sometimes resizes the activity window when the IME opens and
+  // sometimes doesn't — depending on device, gesture mode, and patch level.
+  // We measure both signals and only pad by the gap the OS didn't already
+  // close: keyboardHeight − (naturalWindowHeight − currentWindowHeight).
+  // If the OS shrunk the window by the full IME amount, JS padding is 0.
+  // Without this check, both signals stack and the chrome above the composer
+  // (header, tab bar, session header, MessageList) collapses to zero height.
   const keyboardHeight = useKeyboardHeight();
+  const { height: currentWindowHeight } = useWindowDimensions();
+  const naturalWindowHeight = useRef(
+    Dimensions.get('window').height
+  ).current;
+  const osShrinkage = Math.max(0, naturalWindowHeight - currentWindowHeight);
+  const jsKeyboardPad = Math.max(0, keyboardHeight - osShrinkage);
   const androidKeyboardPad =
-    Platform.OS === 'android' && keyboardHeight > 0
-      ? { paddingBottom: keyboardHeight }
+    Platform.OS === 'android' && jsKeyboardPad > 0
+      ? { paddingBottom: jsKeyboardPad }
       : null;
 
   // Cold-start / post-kill / post-reconnect recovery: connect.tsx always
