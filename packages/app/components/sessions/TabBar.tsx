@@ -55,7 +55,7 @@ export const TabBar: React.FC<TabBarProps> = ({
   function handleLongPress(session: Session): void {
     Alert.alert(
       `Kill ${session.name}?`,
-      `This will SIGTERM the claude process (pid ${session.pid}) on the daemon host and remove the tab.`,
+      `This will stop the Claude session on the daemon host and remove the tab.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
