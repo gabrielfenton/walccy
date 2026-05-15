@@ -9,7 +9,7 @@ import * as path9 from "path";
 // package.json
 var package_default = {
   name: "walccyd",
-  version: "2.0.0-alpha.1",
+  version: "2.1.0",
   private: true,
   type: "module",
   bin: {
@@ -527,7 +527,9 @@ if (isForeground) {
   );
 }
 var logger = winston.createLogger({
-  level: process.env["WALCCY_LOG_LEVEL"] ?? "info",
+  // Use `||` not `??` so an empty WALCCY_LOG_LEVEL ('') falls back to 'info'
+  // rather than setting an invalid log level.
+  level: process.env["WALCCY_LOG_LEVEL"] || "info",
   transports: transports2
 });
 function setLogLevel(level) {
@@ -536,6 +538,18 @@ function setLogLevel(level) {
 var logger_default = logger;
 
 // src/claude-driver.ts
+var PLAN_MODE_READONLY = /* @__PURE__ */ new Set([
+  "Read",
+  "Grep",
+  "Glob",
+  "NotebookRead",
+  "TodoWrite",
+  "ToolSearch",
+  "WebSearch",
+  "WebFetch"
+]);
+var PLAN_MODE_PASSTHROUGH = /* @__PURE__ */ new Set(["AskUserQuestion", "ExitPlanMode"]);
+var PLAN_MODE_SYSTEM_APPEND = "You are in walccy plan mode. Do not execute write tools (Edit, Write, Bash, NotebookEdit, Task, etc.). Gather context with read-only tools, ask clarifying questions via AskUserQuestion, and then surface your plan via ExitPlanMode for the user to approve before any execution.";
 var cachedClaudePath;
 function resolveClaudePath() {
   if (cachedClaudePath !== void 0) return cachedClaudePath || void 0;
@@ -623,14 +637,28 @@ var ClaudeDriver = class extends EventEmitter {
   currentSessionId = "";
   started = false;
   stopped = false;
+  // SDK's built-in `permissionMode: 'plan'` auto-resolves AskUserQuestion
+  // with empty answers before canUseTool ever fires, so walccy can't surface
+  // the question. We emulate plan mode ourselves: pass `default` to the SDK
+  // and gate tools inside `handlePermissionRequest` based on this flag.
+  intendedPlanMode = false;
   /** Begin pumping. Resolves when the first SDK message arrives. */
   async start() {
     if (this.started) throw new Error("ClaudeDriver: already started");
     this.started = true;
     const canUseTool = (toolName, input, callbackOptions) => this.handlePermissionRequest(toolName, input, callbackOptions);
+    this.intendedPlanMode = this.opts.permissionMode === "plan";
+    const sdkPermissionMode = this.intendedPlanMode ? "default" : this.opts.permissionMode;
     const options = {
       cwd: this.opts.cwd,
-      permissionMode: this.opts.permissionMode,
+      permissionMode: sdkPermissionMode,
+      ...this.intendedPlanMode ? {
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: PLAN_MODE_SYSTEM_APPEND
+        }
+      } : {},
       model: this.opts.model,
       agents: this.opts.agents,
       agent: this.opts.agent,
@@ -698,7 +726,9 @@ var ClaudeDriver = class extends EventEmitter {
   }
   async setPermissionMode(mode) {
     if (!this.q) return;
-    await this.q.setPermissionMode(mode);
+    this.intendedPlanMode = mode === "plan";
+    const sdkMode = mode === "plan" ? "default" : mode;
+    await this.q.setPermissionMode(sdkMode);
   }
   async setModel(model) {
     if (!this.q) return;
@@ -719,6 +749,21 @@ var ClaudeDriver = class extends EventEmitter {
   }
   // ── Permission plane ──
   handlePermissionRequest(toolName, input, cb) {
+    if (this.intendedPlanMode) {
+      if (PLAN_MODE_PASSTHROUGH.has(toolName)) {
+      } else if (PLAN_MODE_READONLY.has(toolName)) {
+        return Promise.resolve({
+          behavior: "allow",
+          updatedInput: input
+        });
+      } else {
+        return Promise.resolve({
+          behavior: "deny",
+          message: "You're in plan mode \u2014 describe the work via ExitPlanMode instead of running this tool. The user will approve or reject the plan before any execution.",
+          interrupt: false
+        });
+      }
+    }
     return new Promise((resolve3) => {
       const requestId = randomUUID();
       const pending = {

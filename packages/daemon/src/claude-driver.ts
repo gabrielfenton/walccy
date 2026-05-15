@@ -31,6 +31,32 @@ import { translate, buildPermissionRequest } from './stream-translator.js';
 import logger from './logger.js';
 
 // ──────────────────────────────────────────────
+// Plan-mode emulation
+// ──────────────────────────────────────────────
+//
+// See `intendedPlanMode` below — SDK plan mode swallows AskUserQuestion, so
+// we run the SDK in `default` and gate tools here.
+
+const PLAN_MODE_READONLY = new Set([
+  'Read',
+  'Grep',
+  'Glob',
+  'NotebookRead',
+  'TodoWrite',
+  'ToolSearch',
+  'WebSearch',
+  'WebFetch',
+]);
+
+const PLAN_MODE_PASSTHROUGH = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
+const PLAN_MODE_SYSTEM_APPEND =
+  'You are in walccy plan mode. Do not execute write tools (Edit, Write, Bash, ' +
+  'NotebookEdit, Task, etc.). Gather context with read-only tools, ask clarifying ' +
+  'questions via AskUserQuestion, and then surface your plan via ExitPlanMode for ' +
+  'the user to approve before any execution.';
+
+// ──────────────────────────────────────────────
 // Resolve the claude CLI executable
 // ──────────────────────────────────────────────
 //
@@ -197,6 +223,11 @@ export class ClaudeDriver extends EventEmitter {
   private currentSessionId = '';
   private started = false;
   private stopped = false;
+  // SDK's built-in `permissionMode: 'plan'` auto-resolves AskUserQuestion
+  // with empty answers before canUseTool ever fires, so walccy can't surface
+  // the question. We emulate plan mode ourselves: pass `default` to the SDK
+  // and gate tools inside `handlePermissionRequest` based on this flag.
+  private intendedPlanMode = false;
 
   constructor(private readonly opts: ClaudeDriverOptions) {
     super();
@@ -210,9 +241,23 @@ export class ClaudeDriver extends EventEmitter {
     const canUseTool: CanUseTool = (toolName, input, callbackOptions) =>
       this.handlePermissionRequest(toolName, input, callbackOptions);
 
+    this.intendedPlanMode = this.opts.permissionMode === 'plan';
+    const sdkPermissionMode: PermissionMode | undefined = this.intendedPlanMode
+      ? 'default'
+      : this.opts.permissionMode;
+
     const options: Options = {
       cwd: this.opts.cwd,
-      permissionMode: this.opts.permissionMode,
+      permissionMode: sdkPermissionMode,
+      ...(this.intendedPlanMode
+        ? {
+            systemPrompt: {
+              type: 'preset' as const,
+              preset: 'claude_code' as const,
+              append: PLAN_MODE_SYSTEM_APPEND,
+            },
+          }
+        : {}),
       model: this.opts.model,
       agents: this.opts.agents,
       agent: this.opts.agent,
@@ -294,7 +339,14 @@ export class ClaudeDriver extends EventEmitter {
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     if (!this.q) return;
-    await this.q.setPermissionMode(mode);
+    // Mirror the start-time logic: when the user picks Plan, keep the SDK
+    // in `default` and emulate plan-mode gating via canUseTool. The system
+    // prompt was fixed at spawn-time, so a mid-session flip won't add the
+    // plan-mode instruction — the canUseTool denials are still enough to
+    // steer the model toward ExitPlanMode.
+    this.intendedPlanMode = mode === 'plan';
+    const sdkMode: PermissionMode = mode === 'plan' ? 'default' : mode;
+    await this.q.setPermissionMode(sdkMode);
   }
 
   async setModel(model?: string): Promise<void> {
@@ -323,6 +375,27 @@ export class ClaudeDriver extends EventEmitter {
     input: Record<string, unknown>,
     cb: Parameters<CanUseTool>[2]
   ): Promise<PermissionResult> {
+    if (this.intendedPlanMode) {
+      // AskUserQuestion + ExitPlanMode must reach the user — those are the
+      // whole point of plan mode. Read-only tools auto-allow so Claude can
+      // gather context for its plan. Everything else is denied with a hint
+      // pointing it back at ExitPlanMode.
+      if (PLAN_MODE_PASSTHROUGH.has(toolName)) {
+        // Fall through to the normal permission_request flow below.
+      } else if (PLAN_MODE_READONLY.has(toolName)) {
+        return Promise.resolve<PermissionResult>({
+          behavior: 'allow',
+          updatedInput: input,
+        });
+      } else {
+        return Promise.resolve<PermissionResult>({
+          behavior: 'deny',
+          message:
+            "You're in plan mode — describe the work via ExitPlanMode instead of running this tool. The user will approve or reject the plan before any execution.",
+          interrupt: false,
+        });
+      }
+    }
     return new Promise<PermissionResult>((resolve) => {
       const requestId = randomUUID();
       const pending: PendingPermission = {
