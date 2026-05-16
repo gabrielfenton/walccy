@@ -55,7 +55,7 @@ export function ClipboardPopup({
       });
     }
     items.push({
-      label: 'Save to Prompt Library',
+      label: 'Save to Prompt Board',
       iconName: 'bookmark',
       onPress: () => onSaveToPromptLibrary(selectedText),
     });

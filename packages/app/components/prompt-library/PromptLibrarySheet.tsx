@@ -3,13 +3,14 @@
 // Bottom sheet modal for browsing and using saved prompts.
 // ──────────────────────────────────────────────
 
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   Alert,
   FlatList,
   Keyboard,
   StyleSheet,
   Text,
+  type TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -66,6 +67,7 @@ interface NewPromptFormProps {
 function NewPromptForm({ onSave, onCancel }: NewPromptFormProps): React.ReactElement {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const contentRef = useRef<TextInput>(null);
 
   const handleSave = () => {
     const trimmedTitle = title.trim();
@@ -88,9 +90,12 @@ function NewPromptForm({ onSave, onCancel }: NewPromptFormProps): React.ReactEle
         autoCapitalize="sentences"
         autoFocus
         returnKeyType="next"
+        onSubmitEditing={() => contentRef.current?.focus()}
+        blurOnSubmit={false}
         accessibilityLabel="Prompt title"
       />
       <WInput
+        ref={contentRef}
         variant="long"
         maxHeight={220}
         inputStyle={formStyles.contentInput}
@@ -98,6 +103,8 @@ function NewPromptForm({ onSave, onCancel }: NewPromptFormProps): React.ReactEle
         onChangeText={setContent}
         placeholder="Prompt content…"
         numberOfLines={4}
+        autoCapitalize="none"
+        autoCorrect={false}
         accessibilityLabel="Prompt content"
       />
       <View style={formStyles.actions}>
@@ -419,7 +426,15 @@ export function PromptLibrarySheet({
         label: 'Delete',
         iconName: 'trash-2',
         style: 'destructive',
-        onPress: () => removeClipboard(entry.id),
+        onPress: () =>
+          Alert.alert('Delete clipboard entry?', undefined, [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: () => removeClipboard(entry.id),
+            },
+          ]),
       },
     ];
   }, [rowMenu, updatePrompt, recordUse, sendNow, togglePinClipboard, removeClipboard]);
@@ -532,14 +547,21 @@ export function PromptLibrarySheet({
 
   // ── Empty state ───────────────────────────────
 
-  const ListEmpty = () => (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyText}>No prompts yet</Text>
-      <Text style={styles.emptySubtext}>
-        Tap "Add" in the header to save your first prompt.
-      </Text>
-    </View>
-  );
+  const ListEmpty = () => {
+    const isSearching = searchQuery.trim().length > 0;
+    return (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyText}>
+          {isSearching ? 'No matches' : 'No prompts yet'}
+        </Text>
+        <Text style={styles.emptySubtext}>
+          {isSearching
+            ? `Nothing matches "${searchQuery.trim()}".`
+            : 'Tap "Add" in the header to save your first prompt.'}
+        </Text>
+      </View>
+    );
+  };
 
   // ─────────────────────────────────────────────
 
@@ -551,7 +573,7 @@ export function PromptLibrarySheet({
         heightRatio={0.7}
       >
         <SheetHeader
-          title="Prompt Library"
+          title="Prompt Board"
           trailingAction={{
             label: showNewForm ? 'Close' : 'Add',
             onPress: () => setShowNewForm((v) => !v),

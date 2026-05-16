@@ -337,7 +337,7 @@ export default function TerminalSessionScreen(): React.ReactElement {
       {/* Save to prompt library modal (cross-platform Alert.prompt replacement) */}
       <TextInputModal
         visible={savePromptText !== null}
-        title="Save to Prompt Library"
+        title="Save to Prompt Board"
         message="Enter a title for this prompt:"
         onSubmit={handleSavePromptSubmit}
         onCancel={() => setSavePromptText(null)}
