@@ -23,6 +23,17 @@ export interface TabItemProps {
 
 function truncateName(name: string, maxChars = 12): string {
   if (name.length <= maxChars) return name;
+  // Preserve a trailing " N" disambiguator (e.g. "resume-generator 2")
+  // so multiple tabs in the same cwd remain distinguishable after truncation.
+  const m = name.match(/^(.*?)( \d+)$/);
+  if (m) {
+    const [, head, suffix] = m;
+    const headRoom = maxChars - suffix.length - 1; // 1 for the ellipsis
+    if (headRoom >= 1) {
+      if (head.length <= headRoom) return head + suffix;
+      return head.slice(0, headRoom) + '…' + suffix;
+    }
+  }
   return name.slice(0, maxChars - 1) + '…';
 }
 
