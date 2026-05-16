@@ -9,7 +9,7 @@ import * as path9 from "path";
 // package.json
 var package_default = {
   name: "walccyd",
-  version: "2.1.0",
+  version: "2.1.1",
   private: true,
   type: "module",
   bin: {
